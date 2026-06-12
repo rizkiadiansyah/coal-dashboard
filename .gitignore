@@ -21,3 +21,12 @@ yarn-error.log
 /.nova
 /.vscode
 /.zed
+
+# Plesk / server-local artifacts
+/.node-version
+/.well-known
+/coal-dashboard
+/index.html.bak
+/public/.php-ini
+/public/.php-version
+/public/admin
