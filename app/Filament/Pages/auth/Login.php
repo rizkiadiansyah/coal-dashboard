@@ -10,6 +10,8 @@ use Illuminate\Validation\ValidationException;
 
 class Login extends BaseLogin
 {
+    protected static string $view = 'filament.pages.auth.login';
+
     // 1. Mengubah form input agar menampilkan Username, bukan Email
     protected function getForms(): array
     {

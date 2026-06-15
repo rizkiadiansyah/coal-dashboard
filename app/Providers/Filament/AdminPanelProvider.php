@@ -35,6 +35,7 @@ class AdminPanelProvider extends PanelProvider
             ->login(Login::class)
             ->brandName('Coal Movement')
             ->brandLogo(null)
+            ->favicon(asset('images/favicon.png'))
             ->sidebarCollapsibleOnDesktop() 
             ->sidebarWidth('15rem')
             ->maxContentWidth(MaxWidth::Full)
