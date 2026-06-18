@@ -42,19 +42,40 @@ class ActivityCoalInBmssTrading extends ChartWidget
     {
         $data = $this->getActivityData();
 
+        $actuals = $data['rows']->pluck('total')->map(fn($v) => (float) $v)->all();
+        $plans   = $data['rows']->pluck('plan')->map(fn($v) => (float) $v)->all();
+
+        // Menggunakan nama properti baru 'material' hasil maps tabel dashboard
+        $labels  = $data['rows']->pluck('material')->all(); 
+
+        $sisa = array_map(function ($plan, $actual) {
+            return max(0, round($plan - $actual, 2));
+        }, $plans, $actuals);
+
         return [
             'datasets' => [
                 [
-                    'label'           => 'Tonase',
-                    'data'            => $data['rows']->pluck('total')->map(fn($value) => (float) $value)->all(),
+                    'label'           => 'Actual',
+                    'data'            => $actuals,
                     'materialIds'     => $data['rows']->pluck('material_ids')->all(),
-                    'backgroundColor' => '#2563eb',
-                    'borderColor'     => '#1d4ed8',
+                    'planData'        => $plans,
+                    'backgroundColor' => '#16a34a',
+                    'borderColor'     => '#15803d',
                     'borderWidth'     => 1,
-                    'borderRadius'    => 6,
+                    'borderRadius'    => 0,
+                    'stack'           => 'stack0',
+                ],
+                [
+                    'label'           => 'Sisa Plan',
+                    'data'            => $sisa,
+                    'backgroundColor' => '#ef4444', 
+                    'borderColor'     => '#dc2626',
+                    'borderWidth'     => 1,
+                    'borderRadius'    => 0,
+                    'stack'           => 'stack0', 
                 ],
             ],
-            'labels' => $data['rows']->pluck('Material_desc')->all(),
+            'labels' => $labels,
         ];
     }
 
@@ -66,7 +87,7 @@ class ActivityCoalInBmssTrading extends ChartWidget
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { display: false },
+                    legend: { display: true, position: 'top' },
                     tooltip: {
                         enabled: false,
                         external: function(context) {
@@ -82,9 +103,7 @@ class ActivityCoalInBmssTrading extends ChartWidget
 
                             if (!tooltipEl._listenerAdded) {
                                 tooltipEl._listenerAdded = true;
-                                tooltipEl.addEventListener('mouseenter', function() {
-                                    tooltipEl._isHovered = true;
-                                });
+                                tooltipEl.addEventListener('mouseenter', function() { tooltipEl._isHovered = true; });
                                 tooltipEl.addEventListener('mouseleave', function() {
                                     tooltipEl._isHovered = false;
                                     tooltipEl.style.display = 'none';
@@ -95,50 +114,53 @@ class ActivityCoalInBmssTrading extends ChartWidget
                             if (!dataPoints || !dataPoints.length) return;
 
                             var dataIndex = dataPoints[0].dataIndex;
-                            var dataset = dataPoints[0].dataset;
-                            var label = dataPoints[0].label;
-                            var value = dataPoints[0].parsed.x;
-                            var ids = dataset.materialIds ? dataset.materialIds[dataIndex] : null;
+                            var actualDataset = context.chart.data.datasets[0];
+                            var label   = dataPoints[0].label;
+                            var actual  = actualDataset.data[dataIndex] || 0;
+                            var plan    = actualDataset.planData ? actualDataset.planData[dataIndex] : 0;
+                            var ids     = actualDataset.materialIds ? actualDataset.materialIds[dataIndex] : null;
+                            var pct     = plan > 0 ? Math.round((actual / plan) * 1000) / 10 : 0;
+                            var achieved = actual >= plan && plan > 0;
 
                             tooltipEl.innerHTML = '';
+
                             var headerEl = document.createElement('div');
-                            headerEl.style.display = 'flex';
-                            headerEl.style.alignItems = 'center';
-                            headerEl.style.marginBottom = '6px';
-                            headerEl.style.gap = '6px';
-
-                            var colorBox = document.createElement('span');
-                            colorBox.style.display = 'inline-block';
-                            colorBox.style.width = '12px';
-                            colorBox.style.height = '12px';
-                            colorBox.style.borderRadius = '2px';
-                            colorBox.style.backgroundColor = dataPoints[0].dataset.backgroundColor || '#2563eb';
-                            colorBox.style.flexShrink = '0';
-
-                            var titleEl = document.createElement('span');
-                            titleEl.style.fontWeight = 'bold';
-                            titleEl.textContent = label;
-
-                            headerEl.appendChild(colorBox);
-                            headerEl.appendChild(titleEl);
+                            headerEl.style.cssText = 'font-weight:bold;margin-bottom:6px;border-bottom:1px solid #374151;padding-bottom:4px';
+                            headerEl.textContent = label;
                             tooltipEl.appendChild(headerEl);
 
+                            var actualEl = document.createElement('div');
+                            actualEl.style.cssText = 'display:flex;justify-content:space-between;gap:16px;color:#60a5fa';
+                            actualEl.innerHTML = '<span>● Actual</span><span>' + new Intl.NumberFormat('id-ID').format(actual) + ' ton</span>';
+                            tooltipEl.appendChild(actualEl);
 
-                            var totalEl = document.createElement('div');
-                            totalEl.style.marginBottom = '8px';
-                            totalEl.textContent = 'Total: ' + new Intl.NumberFormat('id-ID').format(value) + ' ton';
-                            tooltipEl.appendChild(totalEl);
+                            var planEl = document.createElement('div');
+                            planEl.style.cssText = 'display:flex;justify-content:space-between;gap:16px;color:#94a3b8';
+                            planEl.innerHTML = '<span>● Plan</span><span>' + new Intl.NumberFormat('id-ID').format(plan) + ' ton</span>';
+                            tooltipEl.appendChild(planEl);
+
+                            var pctEl = document.createElement('div');
+                            pctEl.style.cssText = 'margin-top:6px;padding-top:4px;border-top:1px solid #374151;font-weight:bold;color:' + (achieved ? '#34d399' : '#f87171');
+                            pctEl.textContent = pct + '% ' + (achieved ? '✓ Tercapai' : '↑ Belum tercapai');
+                            tooltipEl.appendChild(pctEl);
+
+                            if (!achieved && plan > 0) {
+                                var sisaPct = Math.round((100 - pct) * 10) / 10;
+                                var sisaTon = new Intl.NumberFormat('id-ID').format(Math.round((plan - actual) * 100) / 100);
+                                var sisaEl = document.createElement('div');
+                                sisaEl.style.cssText = 'color:#f87171;font-size:11px;margin-top:2px';
+                                sisaEl.textContent = 'Kurang ' + sisaPct + '% lagi (' + sisaTon + ' ton)';
+                                tooltipEl.appendChild(sisaEl);
+                            }
 
                             if (ids) {
                                 var idLabel = document.createElement('div');
-                                idLabel.style.fontWeight = 'bold';
-                                idLabel.style.marginBottom = '4px';
+                                idLabel.style.cssText = 'font-weight:bold;margin-top:6px;margin-bottom:2px;color:#9ca3af;font-size:11px';
                                 idLabel.textContent = 'Material ID:';
                                 tooltipEl.appendChild(idLabel);
-
-                                var idList = ids.split(', ');
-                                idList.forEach(function(id) {
+                                ids.split(', ').forEach(function(id) {
                                     var idEl = document.createElement('div');
+                                    idEl.style.cssText = 'color:#9ca3af;font-size:11px';
                                     idEl.textContent = id;
                                     tooltipEl.appendChild(idEl);
                                 });
@@ -149,55 +171,40 @@ class ActivityCoalInBmssTrading extends ChartWidget
                             var canvasRect = context.chart.canvas.getBoundingClientRect();
                             var x = canvasRect.left + context.tooltip.caretX + 2;
                             var y = canvasRect.top + context.tooltip.caretY - 10;
-
-                            var tooltipWidth = tooltipEl.offsetWidth;
+                            var tooltipWidth  = tooltipEl.offsetWidth;
                             var tooltipHeight = tooltipEl.offsetHeight;
 
-                            if (x + tooltipWidth > window.innerWidth - 20) {
-                                x = canvasRect.left + context.tooltip.caretX - tooltipWidth - 2;
-                            }
-
-                            if (y + tooltipHeight > window.innerHeight - 20) {
-                                y = window.innerHeight - tooltipHeight - 20;
-                            }
-
+                            if (x + tooltipWidth > window.innerWidth - 20) x = canvasRect.left + context.tooltip.caretX - tooltipWidth - 2;
+                            if (y + tooltipHeight > window.innerHeight - 20) y = window.innerHeight - tooltipHeight - 20;
                             if (y < 10) y = 10;
                             if (x < 10) x = 10;
 
-                            tooltipEl.style.left = x + 'px';
-                            tooltipEl.style.top = y + 'px';
+                            tooltipEl.style.left  = x + 'px';
+                            tooltipEl.style.top   = y + 'px';
                             tooltipEl.style.marginLeft = '-8px';
                         }
                     }
                 },
-                datasets: {
-                    bar: {
-                        categoryPercentage: 0.95,
-                        barPercentage: 0.85,
-                    }
-                },
                 scales: {
                     x: {
+                        stacked: true,
                         beginAtZero: true,
                         ticks: {
-                            callback: (value) => new Intl.NumberFormat('id-ID').format(value),
-                            font: { size: 10 }
+                            callback: function(value) { return new Intl.NumberFormat('id-ID').format(value); }
                         }
                     },
                     y: {
-                        afterFit: function(scaleInstance) {
-                            scaleInstance.width = 100;
-                        },
+                        stacked: true,
                         ticks: {
                             autoSkip: false,
                             callback: function(value, index, values) {
-                                const label = this.getLabelForValue(value);
-                                if (label.length > 14) {
-                                    return label.substring(0, 14) + '…';
+                                var label = this.getLabelForValue(value);
+                                if (label.length > 15) {
+                                    return label.match(/.{1,15}(\s|$)/g);
                                 }
                                 return label;
                             },
-                            font: { size: 9 }
+                            font: { size: 10 }
                         }
                     }
                 }
@@ -210,69 +217,85 @@ class ActivityCoalInBmssTrading extends ChartWidget
         return 'bar';
     }
 
-    // -------------------------------------------------------------------------
-    // Public — dipanggil dari blade view
-    // -------------------------------------------------------------------------
-
     public function getActivityData(): array
     {
         return $this->rememberDashboardDataHourly('activity_coal_in_bmss_trading', function () {
+            $f = $this->getDashboardFilter();
+
             $rows = $this->applyDashboardFilters(
                 CoalGetting::query()
                     ->selectRaw(" 
-                        IFNULL(m.Material_desc, tblcoaltransaksimasuk.Kode) as Material_desc,
+                        IFNULL(m.material, TRIM(tblcoaltransaksimasuk.Kode)) as material,
                         ROUND(SUM(tblcoaltransaksimasuk.Netto) / 1000, 2) as total,
-                        GROUP_CONCAT(DISTINCT tblcoaltransaksimasuk.Kode ORDER BY tblcoaltransaksimasuk.Kode SEPARATOR ', ') as material_ids
+                        GROUP_CONCAT(DISTINCT TRIM(tblcoaltransaksimasuk.Kode) ORDER BY tblcoaltransaksimasuk.Kode SEPARATOR ', ') as material_ids
                     ")
-                    ->leftJoin('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-                    ->where('m.Source', 'Coal In BMSS Trading'),
-                'Tanggal',
-                'Kode',
+                    ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
+                        $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
+                    })
+                    ->where('m.type', 'Coal In BMSS Trading'),
+                'tblcoaltransaksimasuk.Tanggal',
             )
-                ->groupBy('m.Material_desc')
+                ->groupBy('m.material')
                 ->orderByDesc('total')
                 ->get();
 
-            $filters = $this->getDashboardFilter();
+            // Ambil plan per material berdasarkan nama dashboard ("Pit Alam 1-3", "Pit Alam 8-9", "PMSS")
+            $planRows = \App\Models\PlanCoalIn::query()
+                ->where('type', 'Coal In BMSS Trading')
+                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
+                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
+                ->whereIn('material_desc', $rows->pluck('material'))
+                ->selectRaw('material_desc, ROUND(SUM(tonase), 2) as total_plan')
+                ->groupBy('material_desc')
+                ->pluck('total_plan', 'material_desc');
 
-            $ritaseQuery = CoalGetting::query()
-                ->leftJoin('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-                ->where('m.Source', 'Coal In BMSS Trading');
+            // Gabungkan plan ke setiap row
+            $rows = $rows->map(function ($row) use ($planRows) {
+                $row->plan = (float) ($planRows[$row->material] ?? 0);
+                return $row;
+            });
 
-            if (!empty($filters['tanggal_awal']) && !empty($filters['tanggal_akhir'])) {
-                $ritaseQuery->whereBetween('tblcoaltransaksimasuk.Tanggal', [$filters['tanggal_awal'], $filters['tanggal_akhir']]);
-            }
+            // Hitung Ritase dengan join yang sama agar sinkron
+            $ritase = $this->applyDashboardFilters(
+                CoalGetting::query()
+                    ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
+                        $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
+                    })
+                    ->where('m.type', 'Coal In BMSS Trading'),
+                'tblcoaltransaksimasuk.Tanggal',
+            )->count();
 
             return [
                 'rows'   => $rows,
                 'total'  => $rows->sum('total') ?? 0,
-                'ritase' => $ritaseQuery->count(),
+                'ritase' => $ritase,
             ];
         });
     }
 
-    /**
-     * TODO: Ganti isi method ini ketika tabel plan sudah tersedia.
-     * Contoh query nanti:
-     *
-     *   $filters = session('dashboard_filter', []);
-     *   $target  = \App\Models\CoalPlan::query()
-     *       ->when(
-     *           !empty($filters['tanggal_awal']),
-     *           fn($q) => $q->whereBetween('Tanggal', [$filters['tanggal_awal'], $filters['tanggal_akhir']])
-     *       )
-     *       ->where('Source', 'Coal In BMSS Trading')
-     *       ->sum('Target_Netto') / 1000;
-     *   return ['target' => (float) $target];
-     */
     public function getPlanData(): array
     {
-        // DUMMY — return 0 → blade tampilkan "Belum dikonfigurasi"
-        // Ganti nilai ini untuk test tampilan, contoh: 5000.0
-        $dummyTarget = 900.0;
+        $f = $this->getDashboardFilter();
 
-        return [
-            'target' => $dummyTarget, // satuan: ton
-        ];
+        // Ambil material yang aktif menggunakan TRIM & FIND_IN_SET yang baru
+        $activeMaterials = CoalGetting::query()
+            ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
+                $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
+            })
+            ->where('m.type', 'Coal In BMSS Trading')
+            ->whereDate('tblcoaltransaksimasuk.Tanggal', '>=', $f['tanggal_awal'])
+            ->whereDate('tblcoaltransaksimasuk.Tanggal', '<=', $f['tanggal_akhir'])
+            ->where('tblcoaltransaksimasuk.Netto', '>', 0)
+            ->distinct()
+            ->pluck('m.material');
+
+        $target = (float) \App\Models\PlanCoalIn::query()
+            ->where('type', 'Coal In BMSS Trading')
+            ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
+            ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
+            ->whereIn('material_desc', $activeMaterials)
+            ->sum('tonase');
+
+        return ['target' => $target];
     }
 }

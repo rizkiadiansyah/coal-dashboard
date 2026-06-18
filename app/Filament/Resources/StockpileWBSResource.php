@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\StockpileWBSResource\Pages;
 use App\Models\StockpileWBS;
 use Filament\Forms\Form;
@@ -15,6 +16,8 @@ use Filament\Forms\Components\DatePicker;
 
 class StockpileWBSResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = StockpileWBS::class;
     protected static ?string $navigationIcon = 'heroicon-o-building-storefront';
     protected static ?string $navigationLabel = 'Stockpile WBS';
@@ -92,4 +95,9 @@ class StockpileWBSResource extends Resource
     }
 
     public static function canCreate(): bool { return false; }
+
+    public static function canAccess(): bool
+    {
+        return static::isFilamentAdmin();
+    }
 }

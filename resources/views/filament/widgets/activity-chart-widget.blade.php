@@ -231,12 +231,12 @@
 
             <div class="mt-3 space-y-1 text-xs text-gray-900 dark:text-gray-100">
                 <p>
-                    Target Harian:
+                    Target:
                     {{ $target > 0 ? number_format($target, 2, ',', '.') . $unit : 'Belum dikonfigurasi' }}
                 </p>
 
                 <p style="{{ $realisasiStyle }}">
-                    Realisasi Harian:
+                    Realisasi:
                     {{ number_format($realisasi, 2, ',', '.') . $unit }}
                     {{ $target > 0 ? ' (' . $persen . '%)' : '' }}
                 </p>

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\PlanBargingWBSResource\Pages;
 use App\Filament\Resources\PlanBargingWBSResource\RelationManagers;
 use App\Models\PlanBargingWBS;
@@ -20,6 +21,8 @@ use Illuminate\Support\Facades\DB;
 
 class PlanBargingWBSResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = PlanBargingWBS::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-top-right-on-square';
@@ -245,5 +248,20 @@ class PlanBargingWBSResource extends Resource
             ->orderBy('Material_desc')
             ->pluck('Material_desc', 'Material_desc')
             ->toArray();
+    }
+
+    public static function canAccess(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canCreate(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return static::canAccessPlan();
     }
 }

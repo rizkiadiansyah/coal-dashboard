@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\HaulingCYResource\Pages;
 use App\Models\HaulingCY;
 use Filament\Forms\Form;
@@ -15,6 +16,8 @@ use Filament\Forms\Components\DatePicker;
 
 class HaulingCYResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = HaulingCY::class;
     protected static ?string $navigationIcon = 'heroicon-o-arrow-right-circle';
     protected static ?string $navigationLabel = 'Hauling ke CY';
@@ -87,4 +90,9 @@ class HaulingCYResource extends Resource
     }
 
     public static function canCreate(): bool { return false; }
+
+    public static function canAccess(): bool
+    {
+        return static::isFilamentAdmin();
+    }
 }

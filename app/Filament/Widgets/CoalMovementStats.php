@@ -97,26 +97,10 @@ class CoalMovementStats extends BaseWidget
             $targetBmssTrading = (float) \App\Models\PlanCoalIn::query()
                 ->where('type', 'Coal In BMSS Trading')
                 ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->whereIn('material_desc', function ($sub) {
-                    $sub->select('m.Material_desc')
-                        ->from('tblcoaltransaksimasuk as t')
-                        ->join('tblcoalmaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereDate('t.Tanggal', now()->toDateString())
-                        ->where('t.Netto', '>', 0)
-                        ->distinct();
-                })
                 ->sum('tonase');
             $targetOutsource   = (float) \App\Models\PlanCoalIn::query()
                 ->where('type', 'Out Source')
                 ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->whereIn('material_desc', function ($sub) {
-                    $sub->select('m.Material_desc')
-                        ->from('tblcoaltransaksimasuk as t')
-                        ->join('tblcoalmaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereDate('t.Tanggal', now()->toDateString())
-                        ->where('t.Netto', '>', 0)
-                        ->distinct();
-                })
                 ->sum('tonase');
             $targetCrushing = (float) \App\Models\PlanCrushing::query()
                 ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
@@ -265,7 +249,7 @@ class CoalMovementStats extends BaseWidget
 
         $pct       = ($actual / $target) * 100;
         $achieved  = $actual >= $target;
-        $statColor = $achieved ? 'success' : 'danger';
+        $statColor = $achieved ? 'success' : ($pct >= 70.0 ? 'warning' : 'danger');
         $pctLabel  = number_format($pct, 1) . '%';
         $targetFmt = number_format($target, 2, ',', '.');
 
@@ -310,7 +294,7 @@ class CoalMovementStats extends BaseWidget
 
         $pct      = ($actual / $target) * 100;
         $achieved = $actual >= $target;
-        $statColor = $achieved ? 'success' : 'danger';
+        $statColor = $achieved ? 'success' : ($pct >= 70.0 ? 'warning' : 'danger');
 
         $pctLabel  = number_format($pct, 1) . '%';
         $targetFmt = number_format($target, 2, ',', '.');

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\PlanStockpileWBSResource\Pages;
 use App\Filament\Resources\PlanStockpileWBSResource\RelationManagers;
 use App\Models\PlanStockpileWBS;
@@ -19,6 +20,8 @@ use Illuminate\Support\Facades\DB;
 
 class PlanStockpileWBSResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = PlanStockpileWBS::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-archive-box';
@@ -247,5 +250,20 @@ class PlanStockpileWBSResource extends Resource
             ->orderBy('Material_desc')
             ->pluck('Material_desc', 'Material_desc')
             ->toArray();
+    }
+
+    public static function canAccess(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canCreate(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return static::canAccessPlan();
     }
 }

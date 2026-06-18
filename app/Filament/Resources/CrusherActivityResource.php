@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\CrusherActivityResource\Pages;
 use App\Models\CrusherActivity;
 use Filament\Forms\Form;
@@ -15,6 +16,8 @@ use Filament\Forms\Components\DatePicker;
 
 class CrusherActivityResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = CrusherActivity::class;
     protected static ?string $navigationIcon = 'heroicon-o-cog-6-tooth';
     protected static ?string $navigationLabel = 'Crushing';
@@ -83,4 +86,9 @@ class CrusherActivityResource extends Resource
     }
 
     public static function canCreate(): bool { return false; }
+
+    public static function canAccess(): bool
+    {
+        return static::isFilamentAdmin();
+    }
 }

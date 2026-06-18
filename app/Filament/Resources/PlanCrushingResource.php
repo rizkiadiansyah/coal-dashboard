@@ -2,7 +2,8 @@
 
 namespace App\Filament\Resources;
 
-use App\Filament\Resources\PlanCrushingResource\Pages; 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
+use App\Filament\Resources\PlanCrushingResource\Pages;
 use App\Filament\Resources\PlanCrushingResource\RelationManagers;
 use App\Models\PlanCrushing;
 use Filament\Forms\Components\DatePicker;
@@ -19,6 +20,8 @@ use Illuminate\Support\Facades\DB;
 
 class PlanCrushingResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = PlanCrushing::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-cog-8-tooth';
@@ -281,5 +284,20 @@ class PlanCrushingResource extends Resource
             ->orderBy('Crusher')
             ->pluck('Crusher', 'Crusher')
             ->toArray();
+    }
+
+    public static function canAccess(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canCreate(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return static::canAccessPlan();
     }
 }

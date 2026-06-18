@@ -45,6 +45,9 @@ class ActivityCoalGetting extends ChartWidget
         $actuals = $data['rows']->pluck('total')->map(fn($v) => (float) $v)->all();
         $plans   = $data['rows']->pluck('plan')->map(fn($v) => (float) $v)->all();
 
+        // Menggunakan nama properti baru 'material' hasil maps tabel dashboard
+        $labels  = $data['rows']->pluck('material')->all(); 
+
         $sisa = array_map(function ($plan, $actual) {
             return max(0, round($plan - $actual, 2));
         }, $plans, $actuals);
@@ -72,9 +75,10 @@ class ActivityCoalGetting extends ChartWidget
                     'stack'           => 'stack0', 
                 ],
             ],
-            'labels' => $data['rows']->pluck('Material_desc')->all(),
+            'labels' => $labels,
         ];
     }
+
     protected function getOptions(): RawJs
     {
         return RawJs::make(<<<'JS'
@@ -120,31 +124,26 @@ class ActivityCoalGetting extends ChartWidget
 
                             tooltipEl.innerHTML = '';
 
-                            // Header material
                             var headerEl = document.createElement('div');
                             headerEl.style.cssText = 'font-weight:bold;margin-bottom:6px;border-bottom:1px solid #374151;padding-bottom:4px';
                             headerEl.textContent = label;
                             tooltipEl.appendChild(headerEl);
 
-                            // Actual
                             var actualEl = document.createElement('div');
                             actualEl.style.cssText = 'display:flex;justify-content:space-between;gap:16px;color:#60a5fa';
                             actualEl.innerHTML = '<span>● Actual</span><span>' + new Intl.NumberFormat('id-ID').format(actual) + ' ton</span>';
                             tooltipEl.appendChild(actualEl);
 
-                            // Plan
                             var planEl = document.createElement('div');
                             planEl.style.cssText = 'display:flex;justify-content:space-between;gap:16px;color:#94a3b8';
                             planEl.innerHTML = '<span>● Plan</span><span>' + new Intl.NumberFormat('id-ID').format(plan) + ' ton</span>';
                             tooltipEl.appendChild(planEl);
 
-                            // Persentase
                             var pctEl = document.createElement('div');
                             pctEl.style.cssText = 'margin-top:6px;padding-top:4px;border-top:1px solid #374151;font-weight:bold;color:' + (achieved ? '#34d399' : '#f87171');
                             pctEl.textContent = pct + '% ' + (achieved ? '✓ Tercapai' : '↑ Belum tercapai');
                             tooltipEl.appendChild(pctEl);
 
-                            // Kurang berapa persen (hanya kalau belum tercapai)
                             if (!achieved && plan > 0) {
                                 var sisaPct = Math.round((100 - pct) * 10) / 10;
                                 var sisaTon = new Intl.NumberFormat('id-ID').format(Math.round((plan - actual) * 100) / 100);
@@ -154,7 +153,6 @@ class ActivityCoalGetting extends ChartWidget
                                 tooltipEl.appendChild(sisaEl);
                             }
 
-                            // Material IDs
                             if (ids) {
                                 var idLabel = document.createElement('div');
                                 idLabel.style.cssText = 'font-weight:bold;margin-top:6px;margin-bottom:2px;color:#9ca3af;font-size:11px';
@@ -219,70 +217,77 @@ class ActivityCoalGetting extends ChartWidget
         return 'bar';
     }
 
-public function getActivityData(): array
-{
-    return $this->rememberDashboardDataHourly('activity_coal_getting', function () {
-        $f = $this->getDashboardFilter();
+    public function getActivityData(): array
+    {
+        return $this->rememberDashboardDataHourly('activity_coal_getting', function () {
+            $f = $this->getDashboardFilter();
 
-        $rows = $this->applyDashboardFilters(
-            CoalGetting::query()
-                ->selectRaw(" 
-                    IFNULL(m.Material_desc, tblcoaltransaksimasuk.Kode) as Material_desc,
-                    ROUND(SUM(tblcoaltransaksimasuk.Netto) / 1000, 2) as total,
-                    GROUP_CONCAT(DISTINCT tblcoaltransaksimasuk.Kode ORDER BY tblcoaltransaksimasuk.Kode SEPARATOR ', ') as material_ids
-                ")
-                ->leftJoin('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-                ->where('m.Source', 'Coal Getting'),
-            'tblcoaltransaksimasuk.Tanggal',
-        )
-            ->groupBy('m.Material_desc')
-            ->orderByDesc('total')
-            ->get();
+            $rows = $this->applyDashboardFilters(
+                CoalGetting::query()
+                    ->selectRaw(" 
+                        IFNULL(m.material, TRIM(tblcoaltransaksimasuk.Kode)) as material,
+                        ROUND(SUM(tblcoaltransaksimasuk.Netto) / 1000, 2) as total,
+                        GROUP_CONCAT(DISTINCT TRIM(tblcoaltransaksimasuk.Kode) ORDER BY tblcoaltransaksimasuk.Kode SEPARATOR ', ') as material_ids
+                    ")
+                    ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
+                        $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
+                    })
+                    ->where('m.type', 'Coal Getting'),
+                'tblcoaltransaksimasuk.Tanggal',
+            )
+                ->groupBy('m.material')
+                ->orderByDesc('total')
+                ->get();
 
-        // Ambil plan per material_desc sesuai filter
-        $planRows = \App\Models\PlanCoalIn::query()
-            ->where('type', 'Coal Getting')
-            ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
-            ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
-            ->whereIn('material_desc', $rows->pluck('Material_desc'))
-            ->selectRaw('material_desc, ROUND(SUM(tonase), 2) as total_plan')
-            ->groupBy('material_desc')
-            ->pluck('total_plan', 'material_desc');
+            // Ambil plan per material berdasarkan nama dashboard ("Pit Alam 1-3", "Pit Alam 8-9", "PMSS")
+            $planRows = \App\Models\PlanCoalIn::query()
+                ->where('type', 'Coal Getting')
+                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
+                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
+                ->whereIn('material_desc', $rows->pluck('material'))
+                ->selectRaw('material_desc, ROUND(SUM(tonase), 2) as total_plan')
+                ->groupBy('material_desc')
+                ->pluck('total_plan', 'material_desc');
 
-        // Gabungkan plan ke setiap row
-        $rows = $rows->map(function ($row) use ($planRows) {
-            $row->plan = (float) ($planRows[$row->Material_desc] ?? 0);
-            return $row;
+            // Gabungkan plan ke setiap row
+            $rows = $rows->map(function ($row) use ($planRows) {
+                $row->plan = (float) ($planRows[$row->material] ?? 0);
+                return $row;
+            });
+
+            // Hitung Ritase dengan join yang sama agar sinkron
+            $ritase = $this->applyDashboardFilters(
+                CoalGetting::query()
+                    ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
+                        $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
+                    })
+                    ->where('m.type', 'Coal Getting'),
+                'tblcoaltransaksimasuk.Tanggal',
+            )->count();
+
+            return [
+                'rows'   => $rows,
+                'total'  => $rows->sum('total') ?? 0,
+                'ritase' => $ritase,
+            ];
         });
-
-        $ritase = $this->applyDashboardFilters(
-            CoalGetting::query()
-                ->leftJoin('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-                ->where('m.Source', 'Coal Getting'),
-            'tblcoaltransaksimasuk.Tanggal',
-        )->count();
-
-        return [
-            'rows'   => $rows,
-            'total'  => $rows->sum('total') ?? 0,
-            'ritase' => $ritase,
-        ];
-    });
-}
+    }
 
     public function getPlanData(): array
     {
         $f = $this->getDashboardFilter();
 
-        // Ambil material_desc yang ada realisasi di periode filter
+        // Ambil material yang aktif menggunakan TRIM & FIND_IN_SET yang baru
         $activeMaterials = CoalGetting::query()
-            ->leftJoin('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-            ->where('m.Source', 'Coal Getting')
+            ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
+                $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
+            })
+            ->where('m.type', 'Coal Getting')
             ->whereDate('tblcoaltransaksimasuk.Tanggal', '>=', $f['tanggal_awal'])
             ->whereDate('tblcoaltransaksimasuk.Tanggal', '<=', $f['tanggal_akhir'])
             ->where('tblcoaltransaksimasuk.Netto', '>', 0)
             ->distinct()
-            ->pluck('m.Material_desc');
+            ->pluck('m.material');
 
         $target = (float) \App\Models\PlanCoalIn::query()
             ->where('type', 'Coal Getting')

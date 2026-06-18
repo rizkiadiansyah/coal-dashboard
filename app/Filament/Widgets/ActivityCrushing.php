@@ -41,66 +41,79 @@ class ActivityCrushing extends ChartWidget
         return $this->badge . ' - Total ' . $totalFormatted . ' ton';
     }
 
-protected function getData(): array
-{
-    $data = $this->getActivityData();
+    protected function getData(): array
+    {
+        $data = $this->getActivityData();
 
-    $actuals = array_map(
-        fn($c) => (float) (($data['per_crusher'][$c]['direct_dumping'] ?? 0) + ($data['per_crusher'][$c]['truck_count'] ?? 0)),
-        $this->crusherList
-    );
+        $directs = array_map(
+            fn($c) => (float) ($data['per_crusher'][$c]['direct_dumping'] ?? 0),
+            $this->crusherList
+        );
 
-    $plans = array_map(
-        fn($c) => (float) ($data['plan_per_crusher'][$c] ?? 0),
-        $this->crusherList
-    );
+        $trucks = array_map(
+            fn($c) => (float) ($data['per_crusher'][$c]['truck_count'] ?? 0),
+            $this->crusherList
+        );
 
-    $sisa = array_map(function ($plan, $actual) {
-        return max(0, round($plan - $actual, 2));
-    }, $plans, $actuals);
+        $plans = array_map(
+            fn($c) => (float) ($data['plan_per_crusher'][$c] ?? 0),
+            $this->crusherList
+        );
 
-    $materialsDirect = array_map(
-        fn($c) => $data['per_crusher'][$c]['materials_direct'] ?? [],
-        $this->crusherList
-    );
+        // Hitung sisa plan berdasarkan akumulasi total actual (Direct + Truck)
+        $sisa = array_map(function ($plan, $dir, $trk) {
+            $actual = $dir + $trk;
+            return max(0, round($plan - $actual, 2));
+        }, $plans, $directs, $trucks);
 
-    $materialsTruck = array_map(
-        fn($c) => $data['per_crusher'][$c]['materials_truck'] ?? [],
-        $this->crusherList
-    );
+        $materialsDirect = array_map(
+            fn($c) => $data['per_crusher'][$c]['materials_direct'] ?? [],
+            $this->crusherList
+        );
 
-    // Gabungkan direct + truck per crusher jadi satu list material
-    $materialsAll = array_map(function ($direct, $truck) {
-        return array_merge($direct, $truck);
-    }, $materialsDirect, $materialsTruck);
+        $materialsTruck = array_map(
+            fn($c) => $data['per_crusher'][$c]['materials_truck'] ?? [],
+            $this->crusherList
+        );
 
-    return [
-        'datasets' => [
-            [
-                'label'           => 'Actual',
-                'data'            => $actuals,
-                'planData'        => $plans,
-                'materials'       => $materialsAll, // ← tambahkan ini
-                'backgroundColor' => '#2563eb',
-                'borderColor'     => '#1d4ed8',
-                'borderWidth'     => 1,
-                'borderRadius'    => 0,
-                'stack'           => 'stack0',
+        return [
+            'datasets' => [
+                [
+                    'label'           => 'Direct Dumping',
+                    'data'            => $directs,
+                    'planData'        => $plans,
+                    'materials'       => $materialsDirect,
+                    'backgroundColor' => '#2563eb', // Biru terang
+                    'borderColor'     => '#1d4ed8',
+                    'borderWidth'     => 1,
+                    'borderRadius'    => 0,
+                    'stack'           => 'stack0', // Menggunakan stack yang sama
+                ],
+                [
+                    'label'           => 'Truck Count',
+                    'data'            => $trucks,
+                    'planData'        => $plans,
+                    'materials'       => $materialsTruck,
+                    'backgroundColor' => '#10b981', // Hijau emerald
+                    'borderColor'     => '#059669',
+                    'borderWidth'     => 1,
+                    'borderRadius'    => 0,
+                    'stack'           => 'stack0', // Menggunakan stack yang sama agar menumpuk
+                ],
+                [
+                    'label'           => 'Sisa Plan',
+                    'data'            => $sisa,
+                    'backgroundColor' => '#ef4444', // Merah
+                    'borderColor'     => '#dc2626',
+                    'borderWidth'     => 1,
+                    'borderRadius'    => 0,
+                    'stack'           => 'stack0', // Menggunakan stack yang sama agar ikut menumpuk di ujung akhir
+                ],
             ],
-            [
-                'label'           => 'Sisa Plan',
-                'data'            => $sisa,
-                'materials'       => $materialsAll, // ← tambahkan ini juga
-                'backgroundColor' => '#ef4444',
-                'borderColor'     => '#dc2626',
-                'borderWidth'     => 1,
-                'borderRadius'    => 0,
-                'stack'           => 'stack0',
-            ],
-        ],
-        'labels' => $this->crusherList,
-    ];
-}
+            'labels' => $this->crusherList,
+        ];
+    }
+
     protected function getOptions(): RawJs
     {
         return RawJs::make(<<<'JS'
@@ -108,6 +121,10 @@ protected function getData(): array
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
+                
+                barPercentage: 0.8,      
+                categoryPercentage: 0.9, 
+
                 plugins: {
                     legend: { display: true, position: 'top' },
                     tooltip: {
@@ -140,16 +157,20 @@ protected function getData(): array
                             var value         = dataPoints[0].parsed.x;
                             var dataset       = dataPoints[0].dataset;
                             var datasetLabel  = dataset.label;
-                            var actualDataset = context.chart.data.datasets[0];
-                            var actual        = actualDataset.data[dataIndex] || 0;
-                            var plan          = actualDataset.planData ? actualDataset.planData[dataIndex] : 0;
+                            
+                            var datasets      = context.chart.data.datasets;
+                            var directVal     = datasets[0].data[dataIndex] || 0;
+                            var truckVal      = datasets[1].data[dataIndex] || 0;
+                            var actual        = directVal + truckVal;
+                            
+                            var plan          = datasets[0].planData ? datasets[0].planData[dataIndex] : 0;
                             var pct           = plan > 0 ? Math.round((actual / plan) * 1000) / 10 : 0;
                             var achieved      = actual >= plan && plan > 0;
                             var materialsList = dataset.materials ? dataset.materials[dataIndex] : [];
 
                             tooltipEl.innerHTML = '';
 
-                            // Header dengan color box
+                            // Header
                             var headerEl = document.createElement('div');
                             headerEl.style.display = 'flex';
                             headerEl.style.alignItems = 'center';
@@ -162,7 +183,6 @@ protected function getData(): array
                             colorBox.style.height = '12px';
                             colorBox.style.borderRadius = '2px';
                             colorBox.style.backgroundColor = dataset.backgroundColor;
-                            colorBox.style.flexShrink = '0';
 
                             var titleEl = document.createElement('span');
                             titleEl.style.fontWeight = 'bold';
@@ -172,33 +192,32 @@ protected function getData(): array
                             headerEl.appendChild(titleEl);
                             tooltipEl.appendChild(headerEl);
 
-                            // Total bar yang diklik
+                            // Nilai bagian bar yang di-hover
                             var totalEl = document.createElement('div');
                             totalEl.style.fontWeight = 'bold';
                             totalEl.style.marginBottom = '6px';
                             totalEl.style.borderBottom = '1px solid #4b5563';
                             totalEl.style.paddingBottom = '4px';
-                            totalEl.textContent = 'Total: ' + new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) + ' ton';
+                            totalEl.textContent = datasetLabel + ': ' + new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) + ' ton';
                             tooltipEl.appendChild(totalEl);
 
-                            // Plan vs Actual
+                            // Informasi total kombinasi actual (Direct + Truck)
                             var actualEl = document.createElement('div');
                             actualEl.style.cssText = 'display:flex;justify-content:space-between;gap:16px;color:#60a5fa';
-                            actualEl.innerHTML = '<span>● Actual Total</span><span>' + new Intl.NumberFormat('id-ID').format(actual) + ' ton</span>';
+                            actualEl.innerHTML = '<span>● Total Kombinasi</span><span>' + new Intl.NumberFormat('id-ID').format(actual) + ' ton</span>';
                             tooltipEl.appendChild(actualEl);
 
                             var planEl = document.createElement('div');
                             planEl.style.cssText = 'display:flex;justify-content:space-between;gap:16px;color:#94a3b8;margin-bottom:4px';
-                            planEl.innerHTML = '<span>● Plan</span><span>' + new Intl.NumberFormat('id-ID').format(plan) + ' ton</span>';
+                            planEl.innerHTML = '<span>● Target Plan</span><span>' + new Intl.NumberFormat('id-ID').format(plan) + ' ton</span>';
                             tooltipEl.appendChild(planEl);
 
-                            // Persentase
+                            // Persentase Pencapaian
                             var pctEl = document.createElement('div');
                             pctEl.style.cssText = 'padding-top:4px;border-top:1px solid #374151;font-weight:bold;color:' + (achieved ? '#34d399' : '#f87171');
                             pctEl.textContent = pct + '% ' + (achieved ? '✓ Tercapai' : '↑ Belum tercapai');
                             tooltipEl.appendChild(pctEl);
 
-                            // Kurang berapa persen
                             if (!achieved && plan > 0) {
                                 var sisaPct = Math.round((100 - pct) * 10) / 10;
                                 var sisaTon = new Intl.NumberFormat('id-ID').format(Math.round((plan - actual) * 100) / 100);
@@ -208,20 +227,16 @@ protected function getData(): array
                                 tooltipEl.appendChild(sisaEl);
                             }
 
-                            // Rincian material
+                            // Rincian material berdasarkan bagian bar yang di-hover
                             if (materialsList && materialsList.length > 0) {
                                 var matHeaderEl = document.createElement('div');
                                 matHeaderEl.style.cssText = 'font-weight:bold;margin-top:8px;margin-bottom:4px;border-top:1px solid #374151;padding-top:4px;color:#9ca3af;font-size:11px';
-                                matHeaderEl.textContent = 'Rincian Material:';
+                                matHeaderEl.textContent = 'Rincian Material (' + datasetLabel + '):';
                                 tooltipEl.appendChild(matHeaderEl);
 
                                 materialsList.forEach(function(mat) {
                                     var matEl = document.createElement('div');
-                                    matEl.style.display = 'flex';
-                                    matEl.style.justifyContent = 'space-between';
-                                    matEl.style.gap = '12px';
-                                    matEl.style.fontSize = '11px';
-                                    matEl.style.color = '#d1d5db';
+                                    matEl.style.cssText = 'display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#d1d5db';
 
                                     var nameSpan = document.createElement('span');
                                     nameSpan.textContent = mat.name;
@@ -234,12 +249,6 @@ protected function getData(): array
                                     matEl.appendChild(volSpan);
                                     tooltipEl.appendChild(matEl);
                                 });
-                            } else {
-                                var emptyEl = document.createElement('div');
-                                emptyEl.style.fontStyle = 'italic';
-                                emptyEl.style.color = '#9ca3af';
-                                emptyEl.textContent = 'Tidak ada rincian material';
-                                tooltipEl.appendChild(emptyEl);
                             }
 
                             tooltipEl.style.display = 'block';
@@ -263,14 +272,14 @@ protected function getData(): array
                 },
                 scales: {
                     x: {
-                        stacked: true,
+                        stacked: true, // Kembalikan ke true agar bar menumpuk menjadi satu kesatuan panjang
                         beginAtZero: true,
                         ticks: {
                             callback: function(value) { return new Intl.NumberFormat('id-ID').format(value); }
                         }
                     },
                     y: {
-                        stacked: true,
+                        stacked: true, // Kembalikan ke true agar kategori sumbu Y mengunci bar tumpukan tersebut
                         ticks: { autoSkip: false }
                     }
                 }
@@ -354,7 +363,6 @@ protected function getData(): array
                 $totalTonase += ($directDumping + $truckCount);
             }
 
-            // Ambil plan per crusher sesuai filter
             $f = $this->getDashboardFilter();
 
             $planPerCrusher = \App\Models\PlanCrushing::query()

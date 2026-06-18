@@ -47,6 +47,10 @@ class User extends Authenticatable implements FilamentUser
      */
     protected $keyType = 'string';
 
+    public const ROLE_ADMIN = 1;
+    public const ROLE_MANAGEMENT = 2;
+    public const ROLE_MCR = 3;
+
     /**
      * Field-field yang diperbolehkan untuk diisi (Mass Assignable)
      * Ditambahkan field baru dari tabel tbluser_dashboard
@@ -107,10 +111,25 @@ class User extends Authenticatable implements FilamentUser
      */
     public function canAccessPanel(Panel $panel): bool
     {
-        // Memastikan user aktif (nilai '1') baru diizinkan masuk panel admin
-        return $this->active === '1';
+        return $this->active === '1' && in_array($this->role, [
+            self::ROLE_ADMIN,
+            self::ROLE_MANAGEMENT,
+            self::ROLE_MCR,
+        ], true);
+    }
 
-        // Jika ke depan ingin dibatasi hanya role tertentu (misal role 1 = Super Admin), kamu bisa ubah menjadi:
-        // return $this->active === '1' && $this->role === 1;
+    public function isAdmin(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
+
+    public function isManagement(): bool
+    {
+        return $this->role === self::ROLE_MANAGEMENT;
+    }
+
+    public function isMcr(): bool
+    {
+        return $this->role === self::ROLE_MCR;
     }
 }

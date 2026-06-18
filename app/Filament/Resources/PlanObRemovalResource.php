@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\PlanObRemovalResource\Pages;
 use App\Filament\Resources\PlanObRemovalResource\RelationManagers;
 use App\Models\PlanObRemoval;
@@ -19,6 +20,8 @@ use Illuminate\Support\Facades\DB;
 
 class PlanObRemovalResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = PlanObRemoval::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-trending-up';
@@ -233,6 +236,21 @@ class PlanObRemovalResource extends Resource
             'index' => Pages\ListPlanObRemovals::route('/'),
             'create' => Pages\CreatePlanObRemoval::route('/create'),
         ];
+    }
+
+    public static function canAccess(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canCreate(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return static::canAccessPlan();
     }
 
     protected static function getYearOptions(): array

@@ -57,7 +57,8 @@ class AdminPanelProvider extends PanelProvider
                     ->group('Data Plan')
                     ->icon('heroicon-o-folder')
                     ->url('#')
-                    ->sort(2),
+                    ->sort(2)
+                    ->visible(fn() => !auth()->user()?->isManagement()),
             ])
             ->middleware([
                 EncryptCookies::class,

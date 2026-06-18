@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\HaulingKAResource\Pages;
 use App\Models\HaulingKA;
 use Filament\Forms\Form;
@@ -15,6 +16,8 @@ use Filament\Forms\Components\DatePicker;
 
 class HaulingKAResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = HaulingKA::class;
     protected static ?string $navigationIcon = 'heroicon-o-forward';
     protected static ?string $navigationLabel = 'Hauling KA ke WBS';
@@ -87,4 +90,9 @@ class HaulingKAResource extends Resource
     }
 
     public static function canCreate(): bool { return false; }
+
+    public static function canAccess(): bool
+    {
+        return static::isFilamentAdmin();
+    }
 }

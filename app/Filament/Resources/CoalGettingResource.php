@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
     
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\CoalGettingResource\Pages;
 use App\Models\CoalGetting;
 use Filament\Forms\Form;
@@ -16,6 +17,8 @@ use Filament\Forms\Components\DatePicker;
 
 class CoalGettingResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = CoalGetting::class;
     protected static ?string $navigationIcon = 'heroicon-o-truck';
     protected static ?string $navigationLabel = 'Coal Getting';
@@ -101,5 +104,10 @@ class CoalGettingResource extends Resource
     public static function canCreate(): bool
     {
         return false; // read only
+    }
+
+    public static function canAccess(): bool
+    {
+        return static::isFilamentAdmin();
     }
 }

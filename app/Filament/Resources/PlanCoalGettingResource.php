@@ -2,9 +2,9 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Resources\Concerns\HasFilamentRoleAccess;
 use App\Filament\Resources\PlanCoalGettingResource\Pages;
 use App\Models\PlanCoalIn;
-use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\DB;
 
 class PlanCoalGettingResource extends Resource
 {
+    use HasFilamentRoleAccess;
+
     protected static ?string $model = PlanCoalIn::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-archive-box';
@@ -72,11 +74,6 @@ class PlanCoalGettingResource extends Resource
     {
         return $table
             ->columns([
-                /*TextColumn::make('id')
-                    ->label('ID')
-                    ->sortable(),
-                    //->toggleable(isToggledHiddenByDefault: true),*/
-
                 TextColumn::make('tahun')
                     ->sortable()
                     ->alignCenter()
@@ -171,7 +168,6 @@ class PlanCoalGettingResource extends Resource
             ->headerActions([
                 Tables\Actions\Action::make('total_tonase')
                     ->label(function ($livewire) {
-                        // Menghitung total secara real-time dari query yang sudah terfilter
                         $total = $livewire->getFilteredTableQuery()->sum('tonase');
                         return 'Total Tonase: ' . number_format($total, 2) . ' Ton';
                     })
@@ -203,6 +199,7 @@ class PlanCoalGettingResource extends Resource
             ->striped()
             ->defaultPaginationPageOption(50);
     }
+
     public static function getEloquentQuery(): \Illuminate\Database\Eloquent\Builder
     {
         return parent::getEloquentQuery()
@@ -220,6 +217,21 @@ class PlanCoalGettingResource extends Resource
             'index' => Pages\ListPlanCoalGettings::route('/'),
             'create' => Pages\CreatePlanCoalGetting::route('/create'),
         ];
+    }
+
+    public static function canAccess(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canCreate(): bool
+    {
+        return static::canAccessPlan();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return static::canAccessPlan();
     }
 
     protected static function getYearOptions(): array
@@ -243,14 +255,13 @@ class PlanCoalGettingResource extends Resource
 
     protected static function getMaterialOptions(): array
     {
-        return DB::connection('mysql_cy')
-            ->table('tblcoalmaterial')
-            ->where('Source', 'Coal Getting')
-            ->whereNotNull('Material_desc')
-            ->where('Material_desc', '!=', '')
+        return DB::table('tblcoalmaterial_dashboard')
+            ->where('type', 'Coal Getting')
+            ->whereNotNull('material')
+            ->where('material', '!=', '')
             ->distinct()
-            ->orderBy('Material_desc')
-            ->pluck('Material_desc', 'Material_desc')
+            ->orderBy('material')
+            ->pluck('material', 'material')
             ->toArray();
     }
 }

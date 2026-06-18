@@ -2,10 +2,14 @@
 
 namespace App\Filament\Pages\Auth;
 
+use App\Models\User;
+use Filament\Facades\Filament;
 use Filament\Forms\Components\Component;
 use Filament\Forms\Components\TextInput;
+use Filament\Http\Responses\Auth\Contracts\LoginResponse;
 use Filament\Pages\Auth\Login as BaseLogin;
 use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
 class Login extends BaseLogin
@@ -42,6 +46,48 @@ class Login extends BaseLogin
     {
         return parent::getPasswordFormComponent()
             ->extraInputAttributes(['tabindex' => '2']); 
+    }
+
+    public function authenticate(): ?LoginResponse
+    {
+        try {
+            $this->rateLimit(5);
+        } catch (\DanHarrin\LivewireRateLimiting\Exceptions\TooManyRequestsException $exception) {
+            $this->getRateLimitedNotification($exception)?->send();
+
+            return null;
+        }
+
+        $data = $this->form->getState();
+
+        $user = User::where('username', $data['username'])->first();
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'data.username' => 'Username tidak ditemukan.',
+            ]);
+        }
+
+        if (! Hash::check($data['password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'data.password' => 'Password salah.',
+            ]);
+        }
+
+        Filament::auth()->login($user, $data['remember'] ?? false);
+
+        if (
+            ($user instanceof \Filament\Models\Contracts\FilamentUser) &&
+            (! $user->canAccessPanel(Filament::getCurrentPanel()))
+        ) {
+            Filament::auth()->logout();
+
+            $this->throwFailureValidationException();
+        }
+
+        session()->regenerate();
+
+        return app(LoginResponse::class);
     }
 
     // 2. Mengubah data credential yang dikirim saat proses login ke Auth Guard

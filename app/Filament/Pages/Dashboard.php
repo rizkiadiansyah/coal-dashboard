@@ -21,6 +21,11 @@ class Dashboard extends \Filament\Pages\Dashboard
     // Ubah teks di dalam tanda kutip ini sesuai nama yang kamu inginkan
     protected static ?string $navigationLabel = 'Dashboard';
 
+    public static function canAccess(): bool
+    {
+        return true;
+    }
+
     public function getWidgets(): array
     {
         return [

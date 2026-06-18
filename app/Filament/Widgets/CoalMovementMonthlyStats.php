@@ -94,14 +94,7 @@ class CoalMovementMonthlyStats extends BaseWidget
                 ->where('type', 'Coal In BMSS Trading')
                 ->where('tahun', $currentYear)
                 ->where('bulan', $currentMonth)
-                ->whereIn('material_desc', function ($sub) use ($currentYear, $currentMonth) {
-                    $sub->select('m.Material_desc')
-                        ->from('tblcoaltransaksimasuk as t')
-                        ->join('tblcoalmaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereRaw("YEAR(t.Tanggal) = ? AND MONTH(t.Tanggal) = ?", [$currentYear, $currentMonth])
-                        ->where('t.Netto', '>', 0)
-                        ->distinct();
-                })
+                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [now()->toDateString()])
                 ->sum('tonase');
 
             // 3. Target Monthly - Outsource
@@ -109,14 +102,7 @@ class CoalMovementMonthlyStats extends BaseWidget
                 ->where('type', 'Out Source')
                 ->where('tahun', $currentYear)
                 ->where('bulan', $currentMonth)
-                ->whereIn('material_desc', function ($sub) use ($currentYear, $currentMonth) {
-                    $sub->select('m.Material_desc')
-                        ->from('tblcoaltransaksimasuk as t')
-                        ->join('tblcoalmaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereRaw("YEAR(t.Tanggal) = ? AND MONTH(t.Tanggal) = ?", [$currentYear, $currentMonth])
-                        ->where('t.Netto', '>', 0)
-                        ->distinct();
-                })
+                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [now()->toDateString()])
                 ->sum('tonase');
 
             // 4. Target Monthly - Crushing (Melibatkan Validasi Crusher + Equipment Sebulan)
@@ -264,7 +250,7 @@ class CoalMovementMonthlyStats extends BaseWidget
 
         $pct       = ($actual / $target) * 100;
         $achieved  = $actual >= $target;
-        $statColor = $achieved ? 'success' : 'danger';
+        $statColor = $achieved ? 'success' : ($pct >= 70.0 ? 'warning' : 'danger');
         $pctLabel  = number_format($pct, 1) . '%';
         $targetFmt = number_format($target, 2, ',', '.');
 
@@ -366,7 +352,7 @@ class CoalMovementMonthlyStats extends BaseWidget
 
         $pct       = ($actual / $target) * 100;
         $achieved  = $actual >= $target;
-        $statColor = $achieved ? 'success' : 'danger';
+        $statColor = $achieved ? 'success' : ($pct >= 70.0 ? 'warning' : 'danger');
         $pctLabel  = number_format($pct, 1) . '%';
         $targetFmt = number_format($target, 2, ',', '.');
 

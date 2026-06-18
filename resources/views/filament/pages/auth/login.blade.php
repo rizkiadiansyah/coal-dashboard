@@ -2,13 +2,15 @@
     <style>
         /* Full Screen Background & Layout */
         .fi-simple-layout {
-            background: 
-                linear-gradient(rgba(10, 10, 12, 0.70), rgba(5, 5, 6, 0.85)),
-                url('/images/bg-batubara.jpg') center center / cover no-repeat !important;
             min-height: 100vh !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
+            background: linear-gradient(rgba(10, 10, 12, 0.70), rgba(5, 5, 6, 0.85)), url('/images/bg-batubara.jpg') center center / cover no-repeat !important;
+        }
+
+        html:not(.dark) .fi-simple-layout {
+            background: linear-gradient(rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.85)), url('/images/bg-batubara.jpg') center center / cover no-repeat !important;
         }
 
         .fi-simple-main-ctn {
@@ -32,6 +34,16 @@
             box-shadow: 
                 0 4px 30px rgba(0, 0, 0, 0.4),
                 0 2rem 4rem rgba(0, 0, 0, 0.6) !important;
+            color: #ffffff;
+        }
+
+        html:not(.dark) .fi-simple-main {
+            background: rgba(255, 255, 255, 0.92) !important;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow:
+                0 4px 24px rgba(15, 23, 42, 0.08),
+                0 1.5rem 3rem rgba(15, 23, 42, 0.1) !important;
+            color: #0f172a;
         }
 
         /* Hide Default Header Elements */
@@ -82,12 +94,20 @@
             letter-spacing: -0.01em;
         }
 
+        html:not(.dark) .coal-login-form-heading h2 {
+            color: #0f172a;
+        }
+
         .coal-login-form-heading span {
             display: block;
             margin-top: 0.6rem;
             color: #94a3b8;
             font-size: 0.925rem;
             line-height: 1.5;
+        }
+
+        html:not(.dark) .coal-login-form-heading span {
+            color: #475569;
         }
 
         /* Input & Button Customizations */
@@ -124,6 +144,35 @@
         .fi-simple-main label {
             color: #cbd5e1 !important;
             font-weight: 500 !important;
+        }
+
+        html:not(.dark) .fi-simple-main label {
+            color: #475569 !important;
+        }
+
+        .fi-simple-main .fi-input-wrp {
+            border-radius: 0.625rem !important;
+            background: rgba(0, 0, 0, 0.2) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+            backdrop-filter: blur(4px);
+        }
+
+        html:not(.dark) .fi-simple-main .fi-input-wrp {
+            background: rgba(255, 255, 255, 0.92) !important;
+            border-color: rgba(15, 23, 42, 0.12) !important;
+        }
+
+        .fi-simple-main .fi-input-wrp:focus-within {
+            border-color: #f59e0b !important;
+            box-shadow: 0 0 0 1px #f59e0b !important;
+        }
+
+        .fi-simple-main .fi-input-wrp .fi-input {
+            color: #ffffff !important;
+        }
+
+        html:not(.dark) .fi-simple-main .fi-input-wrp .fi-input {
+            color: #0f172a !important;
         }
     </style>
     <div class="coal-login-shell">
