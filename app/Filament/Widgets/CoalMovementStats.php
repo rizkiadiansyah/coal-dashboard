@@ -348,13 +348,12 @@ class CoalMovementStats extends BaseWidget
         return $chart;
     }
 
-    private function getCoalInTotal(string $source): float
+    private function getCoalInTotal(string $type): float
     {
         $total = CoalGetting::query()
-            ->join('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-            ->where('m.Source', $source)
-            ->whereDate('tblcoaltransaksimasuk.Tanggal', today())
-            ->sum('tblcoaltransaksimasuk.Netto');
+            ->where('type', $type)
+            ->whereDate('Tanggal', today())
+            ->sum('Netto');
 
         return round($total / 1000, 2);
     }

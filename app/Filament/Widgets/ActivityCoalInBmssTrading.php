@@ -44,8 +44,6 @@ class ActivityCoalInBmssTrading extends ChartWidget
 
         $actuals = $data['rows']->pluck('total')->map(fn($v) => (float) $v)->all();
         $plans   = $data['rows']->pluck('plan')->map(fn($v) => (float) $v)->all();
-
-        // Menggunakan nama properti baru 'material' hasil maps tabel dashboard
         $labels  = $data['rows']->pluck('material')->all(); 
 
         $sisa = array_map(function ($plan, $actual) {
@@ -155,13 +153,27 @@ class ActivityCoalInBmssTrading extends ChartWidget
 
                             if (ids) {
                                 var idLabel = document.createElement('div');
-                                idLabel.style.cssText = 'font-weight:bold;margin-top:6px;margin-bottom:2px;color:#9ca3af;font-size:11px';
+                                idLabel.style.cssText = 'font-weight:bold;margin-top:8px;margin-bottom:4px;border-top:1px solid #374151;padding-top:4px;color:#9ca3af;font-size:11px';
                                 idLabel.textContent = 'Material ID:';
                                 tooltipEl.appendChild(idLabel);
-                                ids.split(', ').forEach(function(id) {
+
+                                ids.split(', ').forEach(function(item) {
+                                    var parts = item.split('#');
+                                    var matDesc = parts[0];
+                                    var matTotal = parts[1] ? parseFloat(parts[1]) : 0;
+
                                     var idEl = document.createElement('div');
-                                    idEl.style.cssText = 'color:#9ca3af;font-size:11px';
-                                    idEl.textContent = id;
+                                    idEl.style.cssText = 'display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#d1d5db';
+
+                                    var nameSpan = document.createElement('span');
+                                    nameSpan.textContent = matDesc;
+
+                                    var volSpan = document.createElement('span');
+                                    volSpan.style.fontWeight = '500';
+                                    volSpan.textContent = new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(matTotal) + ' t';
+
+                                    idEl.appendChild(nameSpan);
+                                    idEl.appendChild(volSpan);
                                     tooltipEl.appendChild(idEl);
                                 });
                             }
@@ -222,6 +234,7 @@ class ActivityCoalInBmssTrading extends ChartWidget
         return $this->rememberDashboardDataHourly('activity_coal_in_bmss_trading', function () {
             $f = $this->getDashboardFilter();
 
+            // 1. Grouping UTAMA tetap 'm.material' agar layout grafik asli tidak berubah
             $rows = $this->applyDashboardFilters(
                 CoalGetting::query()
                     ->selectRaw(" 
@@ -239,7 +252,21 @@ class ActivityCoalInBmssTrading extends ChartWidget
                 ->orderByDesc('total')
                 ->get();
 
-            // Ambil plan per material berdasarkan nama dashboard ("Pit Alam 1-3", "Pit Alam 8-9", "PMSS")
+            // 2. Cari total tonase per masing-masing Kode transaksi
+            $tonasePerKode = $this->applyDashboardFilters(
+                CoalGetting::query()
+                    ->selectRaw("TRIM(Kode) as kode_tunggal, ROUND(SUM(Netto) / 1000, 2) as total_tonase")
+                    ->groupBy(DB::raw("TRIM(Kode)")),
+                'tblcoaltransaksimasuk.Tanggal'
+            )->pluck('total_tonase', 'kode_tunggal')->toArray();
+
+            // 3. Ambil mapping Material Description berdasarkan material_id dari tabel tblcoalmaterial
+            $materialDescriptions = DB::table('tblcoalmaterial')
+                ->selectRaw("TRIM(material_id) as mat_id, TRIM(material_desc) as mat_desc")
+                ->pluck('mat_desc', 'mat_id')
+                ->toArray();
+
+            // 4. Ambil target plan per nama grup dashboard
             $planRows = \App\Models\PlanCoalIn::query()
                 ->where('type', 'Coal In BMSS Trading')
                 ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
@@ -249,13 +276,27 @@ class ActivityCoalInBmssTrading extends ChartWidget
                 ->groupBy('material_desc')
                 ->pluck('total_plan', 'material_desc');
 
-            // Gabungkan plan ke setiap row
-            $rows = $rows->map(function ($row) use ($planRows) {
+            // 5. Di sini triknya: kita ubah isi kode menjadi material_desc sebelum dikirim ke Javascript
+            $rows = $rows->map(function ($row) use ($planRows, $tonasePerKode, $materialDescriptions) {
                 $row->plan = (float) ($planRows[$row->material] ?? 0);
+                
+                if ($row->material_ids) {
+                    $arrKode = explode(', ', $row->material_ids);
+                    $arrFormatted = [];
+                    foreach ($arrKode as $kd) {
+                        $tonase = $tonasePerKode[$kd] ?? 0;
+                        // Ambil deskripsinya dari master table, kalau kosong balikkan ke kodenya semula
+                        $descName = $materialDescriptions[$kd] ?? $kd;
+                        
+                        $arrFormatted[] = $descName . '#' . $tonase;
+                    }
+                    $row->material_ids = implode(', ', $arrFormatted);
+                }
+                
                 return $row;
             });
 
-            // Hitung Ritase dengan join yang sama agar sinkron
+            // 6. Hitung ritase total
             $ritase = $this->applyDashboardFilters(
                 CoalGetting::query()
                     ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
@@ -277,7 +318,6 @@ class ActivityCoalInBmssTrading extends ChartWidget
     {
         $f = $this->getDashboardFilter();
 
-        // Ambil material yang aktif menggunakan TRIM & FIND_IN_SET yang baru
         $activeMaterials = CoalGetting::query()
             ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
                 $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));

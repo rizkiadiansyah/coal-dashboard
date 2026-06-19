@@ -294,14 +294,13 @@ class CoalMovementMonthlyStats extends BaseWidget
 
         return $chart;
     }
-
-    private function getCoalInTotalMonthly(string $source, $startOfMonth, $now): float
+    private function getCoalInTotalMonthly(string $type, $startOfMonth, $now): float
     {
+        // Langsung tembak kolom 'type' bawaan tabel transaksi tanpa JOIN
         $total = CoalGetting::query()
-            ->join('tblcoalmaterial as m', 'tblcoaltransaksimasuk.Kode', '=', 'm.Material_id')
-            ->where('m.Source', $source)
-            ->whereBetween('tblcoaltransaksimasuk.Tanggal', [$startOfMonth, $now])
-            ->sum('tblcoaltransaksimasuk.Netto');
+            ->where('type', $type)
+            ->whereBetween('Tanggal', [$startOfMonth, $now])
+            ->sum('Netto');
 
         return round($total / 1000, 2);
     }

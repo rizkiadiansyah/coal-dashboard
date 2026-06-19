@@ -274,14 +274,13 @@ class PlanObRemovalResource extends Resource
 
     protected static function getMaterialOptions(): array
     {
-        return DB::connection('mysql_cy')
-            ->table('tblcoalmaterial')
-            ->where('Source', 'Coal Getting')
-            ->whereNotNull('Material_desc')
-            ->where('Material_desc', '!=', '')
+        return DB::table('tblcoalmaterial_dashboard')
+            ->where('type', 'Coal Getting')
+            ->whereNotNull('material')
+            ->where('material', '!=', '')
             ->distinct()
-            ->orderBy('Material_desc')
-            ->pluck('Material_desc', 'Material_desc')
+            ->orderBy('material')
+            ->pluck('material', 'material')
             ->toArray();
     }
 }
