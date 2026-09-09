@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Cache;
 
 class CoalMovementStats extends BaseWidget
 {
+    protected static bool $isLazy = true;
     protected static string $view = 'filament.widgets.coal-movement-stats';
     protected static ?int $sort = 2;
     protected int | string | array $columnSpan = 'full';
@@ -42,44 +43,63 @@ class CoalMovementStats extends BaseWidget
     protected function getStats(): array
     {
         return $this->rememberDailyDataHourly('coal_movement_stats', function () {
-            $coalGetting = $this->getCoalInTotal('Coal Getting');
-            $bmssTrading = $this->getCoalInTotal('Coal In BMSS Trading');
-            $outsource   = $this->getCoalInTotal('Out Source');
+            $today = today();
+            $now = now();
+            $year = (int) $now->year;
+            $month = (int) $now->month;
+            $day = (int) $now->day;
 
-            // Crushing
-            $crushing = CrusherActivity::query()
+            // 1. Coal In (Coal Getting, BMSS Trading, Out Source) dalam 1 query
+            $coalInTotals = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblcoaltransaksimasuk')
+                ->whereDate('Tanggal', $today)
+                ->groupBy('type')
+                ->selectRaw("type, ROUND(SUM(Netto) / 1000, 2) as total")
+                ->pluck('total', 'type')
+                ->toArray();
+
+            $coalGetting = (float) ($coalInTotals['Coal Getting'] ?? 0);
+            $bmssTrading = (float) ($coalInTotals['Coal In BMSS Trading'] ?? 0);
+            $outsource   = (float) ($coalInTotals['Out Source'] ?? 0);
+
+            // 2. Crushing
+            $crushing = (float) \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblcrusheractivity')
                 ->whereIn('Crusher', ['FB08001', 'CP08001'])
                 ->where('Activity', 'Coal Crushing')
-                ->whereDate('Tanggal', today())
+                ->whereDate('Tanggal', $today)
                 ->sum('Tonase');
 
-            // Hauling CY
+            // 3. Hauling CY
             $haulingCY = round(
-                HaulingCY::query()
-                    ->whereDate('Tanggal', today())
-                    ->sum('Netto') / 1000, 2
+                ((float) \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                    ->table('tblkirimcytransaksikirim')
+                    ->whereDate('Tanggal', $today)
+                    ->sum('Netto')) / 1000, 2
             );
 
-            // Hauling KA
+            // 4. Hauling KA
             $haulingKA = round(
-                HaulingKA::query()
-                    ->whereDate('Tanggal', today())
-                    ->sum('Netto') / 1000, 2
-            );
-
-            // Stockpile WBS
-            $wbs = round(
-                StockpileWBS::query()
-                    ->whereDate('TimeMasuk', today())
-                    ->sum('Netto') / 1000, 2
-            );
-
-            // 2. Tambahan: Ambil data Pengiriman CY Hari Ini (dari database mysql_cy)
-            $cyKirim = round(
-                \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ((float) \Illuminate\Support\Facades\DB::connection('mysql_cy')
                     ->table('tblkirimcytransaksikirim_ka')
-                    ->whereDate('WaktuBerangkat', today())
-                    ->sum('Netto') / 1000, 2
+                    ->whereDate('Tanggal', $today)
+                    ->sum('Netto')) / 1000, 2
+            );
+
+            // 5. Stockpile WBS
+            $wbs = round(
+                ((float) \Illuminate\Support\Facades\DB::connection('mysql_wbs')
+                    ->table('tbltransaksimasuk')
+                    ->whereDate('TimeMasuk', $today)
+                    ->sum('Netto')) / 1000, 2
+            );
+
+            // 6. Pengiriman CY Hari Ini
+            $cyKirim = round(
+                ((float) \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                    ->table('tblkirimcytransaksikirim_ka')
+                    ->whereDate('WaktuBerangkat', $today)
+                    ->sum('Netto')) / 1000, 2
             );
 
             $obRemoval = $this->getObRemovalTotal();
@@ -87,66 +107,118 @@ class CoalMovementStats extends BaseWidget
                 ? round($obRemoval['actual'] / $coalGetting, 2)
                 : 0;
 
-            // 3. Tambahan: Hitung Nilai Selisihnya
             $totalSelisihWBS = round($wbs - $cyKirim, 2);
 
-            $targetCoalGetting = (float) \App\Models\PlanCoalIn::query()
-                ->where('type', 'Coal Getting')
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->sum('tonase');
-            $targetBmssTrading = (float) \App\Models\PlanCoalIn::query()
-                ->where('type', 'Coal In BMSS Trading')
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->sum('tonase');
-            $targetOutsource   = (float) \App\Models\PlanCoalIn::query()
-                ->where('type', 'Out Source')
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->sum('tonase');
-            $targetCrushing = (float) \App\Models\PlanCrushing::query()
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->whereExists(function ($sub) {
-                    $sub->select(\Illuminate\Support\Facades\DB::raw(1))
-                        ->from('tblcrusheractivity as t')
-                        ->join('tblcrushermaterial as m', 't.Kode_Material', '=', 'm.Material_id')
-                        ->whereDate('t.Tanggal', now()->toDateString())
-                        ->where('t.Tonase', '>', 0)
-                        ->whereColumn('m.Material_desc', 'tblplanprodcrush.material_desc')
-                        ->whereColumn('t.Crusher', 'tblplanprodcrush.equipment'); 
-                })
-                ->sum('tonase');
-            $targetHaulingCY   = (float) \App\Models\PlanHaulingCY::query()
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->whereExists(function ($sub) {
-                    $sub->select(\Illuminate\Support\Facades\DB::raw(1))
-                        ->from('tblkirimcytransaksikirim as t')
-                        ->join('tblkirimcymaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereDate('t.Tanggal', now()->toDateString())
-                        ->where('t.Netto', '>', 0)
-                        ->whereColumn('m.Material_desc', 'tblplanprodhaulcy.material_desc'); 
-                })
-                ->sum('tonase');
-            $targetHaulingKA   = (float) \App\Models\PlanHaulingKA::query()
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->whereExists(function ($sub) {
-                    $sub->select(\Illuminate\Support\Facades\DB::raw(1))
-                        ->from('tblkirimcytransaksikirim_ka as t')
-                        ->join('tblkirimcymaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereDate('t.Tanggal', now()->toDateString())
-                        ->where('t.Netto', '>', 0)
-                        ->whereColumn('m.Material_desc', 'tblplanprodhaul_ka.material_desc'); 
-                })
-                ->sum('tonase');
-            $targetWbs         = (float) \App\Models\PlanStockpileWBS::query()
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') = ?", [now()->toDateString()])
-                ->whereExists(function ($sub) {
-                    $sub->select(\Illuminate\Support\Facades\DB::raw(1))
-                        ->from('tbltransaksimasuk as t')
-                        ->join('tblmaterial as m', 't.Kode', '=', 'm.Material_id')
-                        ->whereDate('t.TimeMasuk', now()->toDateString())
-                        ->where('t.Netto', '>', 0)
-                        ->whereColumn('m.Material_desc', 'tblplanprodstockwbs.material_desc'); 
-                })
-                ->sum('tonase');
+            // 7. Target Coal In Plans (Coal Getting, BMSS Trading, Out Source) dalam 1 query
+            $planCoalInTotals = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblplanprodcoalin')
+                ->where('tahun', $year)
+                ->where('bulan', $month)
+                ->where('hari_ke', $day)
+                ->groupBy('type')
+                ->pluck(\Illuminate\Support\Facades\DB::raw('SUM(tonase)'), 'type')
+                ->toArray();
+
+            $targetCoalGetting = (float) ($planCoalInTotals['Coal Getting'] ?? 0);
+            $targetBmssTrading = (float) ($planCoalInTotals['Coal In BMSS Trading'] ?? 0);
+            $targetOutsource   = (float) ($planCoalInTotals['Out Source'] ?? 0);
+
+            // 8. Target Crushing (PHP Matching dari material aktif hari ini)
+            $activeCrushMaterials = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblcrusheractivity as t')
+                ->join('tblcrushermaterial as m', 't.Kode_Material', '=', 'm.Material_id')
+                ->whereDate('t.Tanggal', $today)
+                ->where('t.Tonase', '>', 0)
+                ->selectRaw("CONCAT(t.Crusher, '|', m.Material_desc) as pair")
+                ->pluck('pair')
+                ->flip()
+                ->toArray();
+
+            $crushPlans = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblplanprodcrush')
+                ->where('tahun', $year)
+                ->where('bulan', $month)
+                ->where('hari_ke', $day)
+                ->get();
+
+            $targetCrushing = 0.0;
+            foreach ($crushPlans as $cp) {
+                if (isset($activeCrushMaterials[$cp->equipment . '|' . $cp->material_desc])) {
+                    $targetCrushing += (float) $cp->tonase;
+                }
+            }
+
+            // 9. Target Hauling CY (PHP Matching dari material aktif hari ini)
+            $activeHaulCyDesc = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblkirimcytransaksikirim as t')
+                ->join('tblkirimcymaterial as m', 't.Kode', '=', 'm.Material_id')
+                ->whereDate('t.Tanggal', $today)
+                ->where('t.Netto', '>', 0)
+                ->pluck('m.Material_desc')
+                ->flip()
+                ->toArray();
+
+            $haulCyPlans = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblplanprodhaulcy')
+                ->where('tahun', $year)
+                ->where('bulan', $month)
+                ->where('hari_ke', $day)
+                ->get();
+
+            $targetHaulingCY = 0.0;
+            foreach ($haulCyPlans as $hp) {
+                if (isset($activeHaulCyDesc[$hp->material_desc])) {
+                    $targetHaulingCY += (float) $hp->tonase;
+                }
+            }
+
+            // 10. Target Hauling KA (PHP Matching dari material aktif hari ini)
+            $activeHaulKaDesc = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblkirimcytransaksikirim_ka as t')
+                ->join('tblkirimcymaterial as m', 't.Kode', '=', 'm.Material_id')
+                ->whereDate('t.Tanggal', $today)
+                ->where('t.Netto', '>', 0)
+                ->pluck('m.Material_desc')
+                ->flip()
+                ->toArray();
+
+            $haulKaPlans = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+                ->table('tblplanprodhaul_ka')
+                ->where('tahun', $year)
+                ->where('bulan', $month)
+                ->where('hari_ke', $day)
+                ->get();
+
+            $targetHaulingKA = 0.0;
+            foreach ($haulKaPlans as $kp) {
+                if (isset($activeHaulKaDesc[$kp->material_desc])) {
+                    $targetHaulingKA += (float) $kp->tonase;
+                }
+            }
+
+            // 11. Target WBS (PHP Matching dari material aktif hari ini)
+            $activeWbsDesc = \Illuminate\Support\Facades\DB::connection('mysql_wbs')
+                ->table('tbltransaksimasuk as t')
+                ->join('tblmaterial as m', 't.Kode', '=', 'm.Material_id')
+                ->whereDate('t.TimeMasuk', $today)
+                ->where('t.Netto', '>', 0)
+                ->pluck('m.Material_desc')
+                ->flip()
+                ->toArray();
+
+            $wbsPlans = \Illuminate\Support\Facades\DB::connection('mysql_wbs')
+                ->table('tblplanprodstockwbs')
+                ->where('tahun', $year)
+                ->where('bulan', $month)
+                ->where('hari_ke', $day)
+                ->get();
+
+            $targetWbs = 0.0;
+            foreach ($wbsPlans as $wp) {
+                if (isset($activeWbsDesc[$wp->material_desc])) {
+                    $targetWbs += (float) $wp->tonase;
+                }
+            }
 
             return [
                 $this->buildStatBcm(
@@ -207,7 +279,7 @@ class CoalMovementStats extends BaseWidget
                     target      : $targetHaulingKA,
                     description : 'Pengiriman KA',
                     color       : 'success',
-                    extraInfo   : null, // Tidak perlu extra info untuk ini
+                    extraInfo   : null,
                 ),
 
                 $this->buildStat(
@@ -216,7 +288,7 @@ class CoalMovementStats extends BaseWidget
                     target      : $targetWbs,
                     description : 'Terima di WBS',
                     color       : 'gray',
-                    extraInfo   : "Selisih: {$totalSelisihWBS} Ton", // ← Kirim teks selisih ke sini
+                    extraInfo   : "Selisih: {$totalSelisihWBS} Ton",
                 ),
             ];
         });
@@ -238,12 +310,18 @@ class CoalMovementStats extends BaseWidget
         ?string $extraInfo = null,
     ): Stat {
         if ($target <= 0) {
-            $descTeks = $description . ' — target belum diset';
+            $lines = ['Target belum diset'];
             if ($extraInfo) {
-                $descTeks .= " | {$extraInfo}";
+                $lines[] = $extraInfo;
             }
+            $html = new \Illuminate\Support\HtmlString(
+                '<div class="flex flex-col gap-0.5 mt-0.5 text-xs leading-normal text-gray-500 dark:text-gray-400">' .
+                implode('', array_map(fn($l) => '<div>' . e($l) . '</div>', $lines)) .
+                '</div>'
+            );
+
             return Stat::make($label, number_format($actual, 2, ',', '.') . ' Ton')
-                ->description($descTeks)
+                ->description($html)
                 ->color($color);
         }
 
@@ -263,13 +341,22 @@ class CoalMovementStats extends BaseWidget
             $statusFmt = "↑ Sisa {$sisaFmt} Ton";
         }
 
-        $finalDesc = "{$description} | Target: {$targetFmt} Ton | {$pctLabel} | {$statusFmt}";
+        $lines = [
+            "Target: {$targetFmt} Ton | {$pctLabel}",
+            $statusFmt,
+        ];
         if ($extraInfo) {
-            $finalDesc .= " | {$extraInfo}";
+            $lines[] = $extraInfo;
         }
 
+        $html = new \Illuminate\Support\HtmlString(
+            '<div class="flex flex-col gap-0.5 mt-0.5 text-xs leading-normal">' .
+            implode('', array_map(fn($l) => '<div>' . e($l) . '</div>', $lines)) .
+            '</div>'
+        );
+
         return Stat::make($label, number_format($actual, 2, ',', '.') . ' Ton')
-            ->description($finalDesc)
+            ->description($html)
             ->color($statColor)
             ->chart($this->buildProgressChart($pct));
     }
@@ -283,12 +370,18 @@ class CoalMovementStats extends BaseWidget
         ?string $extraInfo = null,
     ): Stat {
         if ($target <= 0) {
-            $descTeks = $description . ' — target belum diset';
+            $lines = ['Target belum diset'];
             if ($extraInfo) {
-                $descTeks .= " | {$extraInfo}";
+                $lines[] = $extraInfo;
             }
+            $html = new \Illuminate\Support\HtmlString(
+                '<div class="flex flex-col gap-0.5 mt-0.5 text-xs leading-normal text-gray-500 dark:text-gray-400">' .
+                implode('', array_map(fn($l) => '<div>' . e($l) . '</div>', $lines)) .
+                '</div>'
+            );
+
             return Stat::make($label, number_format($actual, 2, ',', '.') . ' BCM')
-                ->description($descTeks)
+                ->description($html)
                 ->color($color);
         }
 
@@ -309,13 +402,22 @@ class CoalMovementStats extends BaseWidget
             $statusFmt = "↑ Sisa {$sisaFmt} BCM";
         }
 
-        $finalDesc = "{$description} | Target: {$targetFmt} BCM | {$pctLabel} | {$statusFmt}";
+        $lines = [
+            "Target: {$targetFmt} BCM | {$pctLabel}",
+            $statusFmt,
+        ];
         if ($extraInfo) {
-            $finalDesc .= " | {$extraInfo}";
+            $lines[] = $extraInfo;
         }
 
+        $html = new \Illuminate\Support\HtmlString(
+            '<div class="flex flex-col gap-0.5 mt-0.5 text-xs leading-normal">' .
+            implode('', array_map(fn($l) => '<div>' . e($l) . '</div>', $lines)) .
+            '</div>'
+        );
+
         return Stat::make($label, number_format($actual, 2, ',', '.') . ' BCM')
-            ->description($finalDesc)
+            ->description($html)
             ->color($statColor)
             ->chart($this->buildProgressChart($pct));
     }
@@ -360,23 +462,18 @@ class CoalMovementStats extends BaseWidget
     
     private function getObRemovalTotal(): array
     {
-        $virtualDateRaw = "STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d')";
-        $today          = now()->toDateString();
-
-        // Target: sum SEMUA plan hari ini, tanpa filter material
-        $target = (float) \App\Models\PlanObRemoval::query()
-            ->whereRaw("$virtualDateRaw = ?", [$today])
-            ->sum('plan');
-
-        // Actual: sum hanya material yang actual > 0
-        $actual = (float) \App\Models\PlanObRemoval::query()
-            ->whereRaw("$virtualDateRaw = ?", [$today])
-            ->where('actual', '>', 0)
-            ->sum('actual');
+        $now = now();
+        $obRows = \Illuminate\Support\Facades\DB::connection('mysql_cy')
+            ->table('tblobremoval')
+            ->where('tahun', (int) $now->year)
+            ->where('bulan', (int) $now->month)
+            ->where('hari_ke', (int) $now->day)
+            ->selectRaw("SUM(IFNULL(plan, 0)) as total_plan, SUM(CASE WHEN actual > 0 THEN actual ELSE 0 END) as total_actual")
+            ->first();
 
         return [
-            'actual' => round($actual, 2),
-            'target' => round($target, 2),
+            'actual' => round((float) ($obRows->total_actual ?? 0), 2),
+            'target' => round((float) ($obRows->total_plan ?? 0), 2),
         ];
     }
 

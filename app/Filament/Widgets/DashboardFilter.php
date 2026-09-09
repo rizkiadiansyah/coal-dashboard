@@ -10,17 +10,25 @@ use Illuminate\Support\Facades\DB;
 
 class DashboardFilter extends Widget
 {
+    protected static bool $isLazy = false;
     use FiltersDashboardPeriod;
 
     protected static string $view  = 'filament.widgets.dashboard-filter';
     protected static ?int   $sort  = 1;
     protected int | string | array $columnSpan = 'full';
+    protected $listeners = ['filterUpdated' => 'refreshDashboardData'];
 
     // Polling 60 detik agar "X menit lalu" otomatis terupdate
     protected static ?string $pollingInterval = '60s';
 
     public string $filterTanggalAwal  = '';
     public string $filterTanggalAkhir = '';
+    public int $dashboardRefreshKey = 0;
+
+    public function refreshDashboardData(): void
+    {
+        $this->dashboardRefreshKey++;
+    }
 
     public function mount(): void
     {
@@ -38,6 +46,12 @@ class DashboardFilter extends Widget
             ];
             session(['dashboard_filter' => $default]);
             Cache::put('dashboard_filter', $default, now()->addHours(2));
+        }
+
+        if (!session()->has('dashboard_last_refreshed_at') && !Cache::has('dashboard_last_refreshed_at')) {
+            $nowStr = now('Asia/Jakarta')->toDateTimeString();
+            session(['dashboard_last_refreshed_at' => $nowStr]);
+            Cache::put('dashboard_last_refreshed_at', $nowStr, now()->addHours(24));
         }
     }
 
@@ -61,6 +75,11 @@ class DashboardFilter extends Widget
         session(['dashboard_filter' => $filter]);
         Cache::put('dashboard_filter', $filter, now()->addHours(2));
 
+        $nowStr = now('Asia/Jakarta')->toDateTimeString();
+        session(['dashboard_last_refreshed_at' => $nowStr]);
+        Cache::put('dashboard_last_refreshed_at', $nowStr, now()->addHours(24));
+        $this->dashboardRefreshKey++;
+
         $this->dispatch('filterUpdated');
     }
 
@@ -80,39 +99,40 @@ class DashboardFilter extends Widget
         session(['dashboard_filter' => $filter]);
         Cache::put('dashboard_filter', $filter, now()->addHours(2));
 
+        $nowStr = now('Asia/Jakarta')->toDateTimeString();
+        session(['dashboard_last_refreshed_at' => $nowStr]);
+        Cache::put('dashboard_last_refreshed_at', $nowStr, now()->addHours(24));
+        $this->dashboardRefreshKey++;
+
         $this->dispatch('filterUpdated');
     }
 
     /**
-     * Ambil waktu data terakhir masuk dari DB (MAX TimeMasuk).
-     * Di-cache per jam agar hanya query sekali setiap jam.
+     * Ambil waktu update/sinkronisasi dashboard terakhir.
      */
     public function getLastDataUpdate(): ?array
     {
         $timezone = 'Asia/Jakarta';
-        $cacheKey  = 'dashboard_last_data_update_' . now($timezone)->format('YmdH');
-        $expiresAt = now($timezone)->copy()->startOfHour()->addHour();
+        $refreshedAt = session('dashboard_last_refreshed_at')
+            ?? Cache::get('dashboard_last_refreshed_at')
+            ?? now($timezone)->toDateTimeString();
 
-        $lastTime = Cache::remember($cacheKey, $expiresAt, function () {
-            return DB::connection('mysql_cy')
-                ->table('tblcoaltransaksimasuk')
-                ->whereNotNull('TimeMasuk')
-                ->max('TimeMasuk');
-        });
+        $carbon = \Carbon\Carbon::parse($refreshedAt, $timezone);
+        $now    = \Carbon\Carbon::now($timezone);
 
-        if (!$lastTime) {
-            return null;
+        $diffSeconds = $carbon->diffInSeconds($now);
+        if ($diffSeconds < 60) {
+            $diffText = 'Baru saja';
+        } else {
+            $diffText = $carbon->diffForHumans($now, true) . ' yang lalu';
         }
-
-        $carbon = \Carbon\Carbon::parse($lastTime, 'Asia/Jakarta');
-        $now    = \Carbon\Carbon::now('Asia/Jakarta');
 
         return [
             'time'     => $carbon->format('H:i'),
             'date'     => $carbon->format('d/m/Y'),
-            'diff'     => $carbon->diffForHumans($now, true) . ' yang lalu',
+            'diff'     => $diffText,
             'is_today' => $carbon->isToday(),
-            'is_fresh' => $carbon->diffInMinutes(now()) < 30,
+            'is_fresh' => $diffSeconds < 1800,
         ];
     }
 }

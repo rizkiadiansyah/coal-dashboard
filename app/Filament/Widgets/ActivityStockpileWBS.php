@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 class ActivityStockpileWBS extends ChartWidget
 {
+    protected static bool $isLazy = true;
     use FiltersDashboardPeriod;
 
     protected static string $view = 'filament.widgets.activity-chart-widget';
@@ -219,60 +220,89 @@ class ActivityStockpileWBS extends ChartWidget
     public function getActivityData(): array
     {
         return $this->rememberDashboardDataHourly('activity_stockpile_wbs', function () {
+            // 1. Ambil master material dari database WBS ke PHP memory
+            $matLookup = DB::connection('mysql_wbs')
+                ->table('tblmaterial')
+                ->pluck('Material_desc', 'Material_id')
+                ->toArray();
 
-            // ── 1. Data Utama Chart ───────────────────────────────────────
-            $chart = $this->applyDashboardFilters(
-                StockpileWBS::query()
-                    ->selectRaw("
-                        IFNULL(m.Material_desc, k.Kode)                                             AS Material_desc,
-                        ROUND(SUM(k.Netto) / 1000, 2)                                               AS total_tonase,
-                        COUNT(DISTINCT k.NoKA)                                                      AS total_ka,
-                        SUM(CASE WHEN k.NoCT IS NOT NULL AND k.NoCT <> '' THEN 1 ELSE 0 END)         AS total_ct,
-                        GROUP_CONCAT(DISTINCT k.NoKA ORDER BY k.NoKA SEPARATOR ', ')                 AS no_ka_list
-                    ")
-                    ->from('tbltransaksimasuk as k')
-                    ->leftJoin('tblmaterial as m', 'k.Kode', '=', 'm.Material_id'),
-                'k.TimeMasuk',
-            )
-                ->groupBy('m.Material_desc', 'k.Kode')
-                ->orderByDesc('total_tonase')
-                ->get();
+            // 2. Query transaksi lokal WBS tanpa SQL JOIN
+            $wbsQuery = DB::connection('mysql_wbs')
+                ->table('tbltransaksimasuk')
+                ->selectRaw("Kode, NoKA, NoCT, Netto");
 
-            // ── 2. Summary Database Lokal (Penerimaan) ───────────────────
-            $summary = $this->applyDashboardFilters(
-                StockpileWBS::query()
-                    ->selectRaw("
-                        COUNT(DISTINCT k.NoKA) AS total_ka,
-                        ROUND(SUM(k.Netto) / 1000, 2) AS total_tonase,
-                        SUM(CASE WHEN k.NoCT IS NOT NULL AND k.NoCT <> '' THEN 1 ELSE 0 END) AS total_ct
-                    ")
-                    ->from('tbltransaksimasuk as k'),
-                'k.TimeMasuk',
-            )->first();
+            $rawRows = $this->applyDashboardFilters($wbsQuery, 'TimeMasuk')->get();
 
-            // ── 3. AMBIL DATA DARI DATABASE & TABEL LAIN (Koneksi: mysql_cy) ──
-            // Pastikan 'mysql_cy' sudah terdaftar di config/database.php kamu
+            // 3. Agregasi chart dan summary di level PHP runtime
+            $byMaterial = [];
+            $totalKAOverall = [];
+            $totalCTCount = 0;
+            $totalTonaseOverall = 0.0;
+
+            foreach ($rawRows as $row) {
+                $kode   = (string) $row->Kode;
+                $desc   = $matLookup[$kode] ?? $kode;
+                $tonase = ((float) $row->Netto) / 1000;
+                $totalTonaseOverall += $tonase;
+
+                $noKA = trim((string) ($row->NoKA ?? ''));
+                $noCT = trim((string) ($row->NoCT ?? ''));
+
+                if ($noKA !== '') {
+                    $totalKAOverall[$noKA] = true;
+                }
+                if ($noCT !== '') {
+                    $totalCTCount++;
+                }
+
+                if (!isset($byMaterial[$desc])) {
+                    $byMaterial[$desc] = [
+                        'Material_desc' => $desc,
+                        'tonase'        => 0.0,
+                        'ka_list'       => [],
+                        'ct_count'      => 0,
+                    ];
+                }
+                $byMaterial[$desc]['tonase'] += $tonase;
+                if ($noKA !== '') {
+                    $byMaterial[$desc]['ka_list'][$noKA] = true;
+                }
+                if ($noCT !== '') {
+                    $byMaterial[$desc]['ct_count']++;
+                }
+            }
+
+            $chartRows = [];
+            foreach ($byMaterial as $desc => $item) {
+                $sortedKAs = array_keys($item['ka_list']);
+                sort($sortedKAs);
+                $chartRows[] = (object) [
+                    'Material_desc' => $desc,
+                    'total_tonase'  => round($item['tonase'], 2),
+                    'total_ka'      => count($item['ka_list']),
+                    'total_ct'      => $item['ct_count'],
+                    'no_ka_list'    => implode(', ', $sortedKAs),
+                ];
+            }
+            usort($chartRows, fn($a, $b) => $b->total_tonase <=> $a->total_tonase);
+            $chartCollection = collect($chartRows);
+
+            // 4. Ambil data pengiriman CY dari koneksi mysql_cy
             $queryKirim = DB::connection('mysql_cy')
                 ->table('tblkirimcytransaksikirim_ka')
                 ->selectRaw("ROUND(SUM(Netto) / 1000, 2) AS total_kirim_cy");
 
-            // Terapkan filter tanggal yang sama agar sinkron dengan data penerimaan WBS
-            // Sesuaikan parameter kedua ('TanggalKirim' / 'Created_at') dengan kolom tanggal di tabel tblkirimcytransaksikirim
             $summaryKirim = $this->applyDashboardFilters($queryKirim, 'WaktuBerangkat')->first();
-            
-            $totalKirim = $summaryKirim->total_kirim_cy ?? 0;
+            $totalKirim = (float) ($summaryKirim->total_kirim_cy ?? 0.0);
 
-            // ── 4. Perhitungan Hari & Toleransi Selisih ──────────────────
+            // 5. Perhitungan Hari & Toleransi Selisih
             $filter     = $this->getDashboardFilter();
             $jumlahHari = max(1, (int) \Carbon\Carbon::parse($filter['tanggal_awal'])
                 ->diffInDays(\Carbon\Carbon::parse($filter['tanggal_akhir'])) + 1);
 
             $toleransiDesimal = ($jumlahHari * 0.07) / 100;
-
-            $totalTonase  = $summary->total_tonase ?? 0;
-            
-            // Hitung selisih: Penerimaan WBS ($totalTonase) dikurangi Pengiriman CY ($totalKirim)
-            $totalSelisih = round($totalTonase - $totalKirim, 2);
+            $totalTonase      = round($totalTonaseOverall, 2);
+            $totalSelisih     = round($totalTonase - $totalKirim, 2);
 
             $selisihDesimal  = $totalTonase > 0 ? $totalSelisih / $totalTonase : 0;
             $selisihPersen   = round($selisihDesimal * 100, 4);
@@ -280,14 +310,14 @@ class ActivityStockpileWBS extends ChartWidget
             $statusSelisih   = abs($selisihDesimal) <= $toleransiDesimal ? 'normal' : 'melebihi';
 
             return [
-                'chart' => $chart,
-                'total' => $chart->sum('total_tonase') ?? 0,
+                'chart' => $chartCollection,
+                'total' => $totalTonase,
                 'stats' => [
                     'total_tonase'        => $totalTonase,
-                    'total_kirim'         => $totalKirim, // Diisi dari database mysql_cy
+                    'total_kirim'         => $totalKirim,
                     'total_selisih'       => $totalSelisih,
-                    'total_ka'            => $summary->total_ka ?? 0,
-                    'total_ct'            => $summary->total_ct ?? 0,
+                    'total_ka'            => count($totalKAOverall),
+                    'total_ct'            => $totalCTCount,
                     'jumlah_hari'         => $jumlahHari,
                     'selisih_persen'      => $selisihPersen,
                     'toleransi_persen'    => $toleransiPersen,

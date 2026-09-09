@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 class ActivityCoalGetting extends ChartWidget
 {
+    protected static bool $isLazy = true;
     use FiltersDashboardPeriod;
 
     protected static string $view = 'filament.widgets.activity-chart-widget';
@@ -235,94 +236,113 @@ class ActivityCoalGetting extends ChartWidget
         return $this->rememberDashboardDataHourly('activity_coal_getting', function () {
             $f = $this->getDashboardFilter();
             
-            $rows = $this->applyDashboardFilters(
-                CoalGetting::query()
-                    ->selectRaw(" 
-                        IFNULL(m.material, TRIM(tblcoaltransaksimasuk.Kode)) as material,
-                        ROUND(SUM(tblcoaltransaksimasuk.Netto) / 1000, 2) as total,
-                        GROUP_CONCAT(DISTINCT TRIM(tblcoaltransaksimasuk.Kode) ORDER BY tblcoaltransaksimasuk.Kode SEPARATOR ', ') as material_ids
-                    ")
-                    ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
-                        $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
-                    })
-                    ->where('m.type', 'Coal Getting'),
-                'tblcoaltransaksimasuk.Tanggal',
-            )
-                ->groupBy('m.material')
-                ->orderByDesc('total')
+            // 1. Ambil master mapping material dashboard ke PHP memory (tanpa SQL FIND_IN_SET JOIN)
+            $materialMaps = DB::connection('mysql_cy')
+                ->table('tblcoalmaterial_dashboard')
+                ->where('type', 'Coal Getting')
                 ->get();
 
-            $tonasePerKode = $this->applyDashboardFilters(
-                CoalGetting::query()
-                    ->selectRaw("TRIM(Kode) as kode_tunggal, ROUND(SUM(Netto) / 1000, 2) as total_tonase")
-                    ->groupBy(DB::raw("TRIM(Kode)")),
-                'tblcoaltransaksimasuk.Tanggal'
-            )->pluck('total_tonase', 'kode_tunggal')->toArray();
-
-            $planRows = \App\Models\PlanCoalIn::query()
-                ->where('type', 'Coal Getting')
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
-                ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
-                ->whereIn('material_desc', $rows->pluck('material'))
-                ->selectRaw('material_desc, ROUND(SUM(tonase), 2) as total_plan')
-                ->groupBy('material_desc')
-                ->pluck('total_plan', 'material_desc');
-
-            $rows = $rows->map(function ($row) use ($planRows, $tonasePerKode) {
-                $row->plan = (float) ($planRows[$row->material] ?? 0);
-                
-                if ($row->material_ids) {
-                    $arrKode = explode(', ', $row->material_ids);
-                    $arrFormatted = [];
-                    foreach ($arrKode as $kd) {
-                        $tonase = $tonasePerKode[$kd] ?? 0;
-                        $arrFormatted[] = $kd . '#' . $tonase;
+            $codeToMaterial = [];
+            foreach ($materialMaps as $m) {
+                $codes = explode(',', str_replace(' ', '', (string) $m->code));
+                foreach ($codes as $c) {
+                    $c = trim($c);
+                    if ($c !== '') {
+                        $codeToMaterial[$c] = $m->material;
                     }
-                    $row->material_ids = implode(', ', $arrFormatted);
                 }
-                
-                return $row;
-            });
+            }
 
-            $ritase = $this->applyDashboardFilters(
-                CoalGetting::query()
-                    ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
-                        $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
-                    })
-                    ->where('m.type', 'Coal Getting'),
-                'tblcoaltransaksimasuk.Tanggal',
-            )->count();
+            // 2. Query transaksi langsung dengan index filter tanpa DB join
+            $txQuery = DB::connection('mysql_cy')
+                ->table('tblcoaltransaksimasuk')
+                ->selectRaw("TRIM(Kode) as kode, SUM(Netto) as total_netto, COUNT(*) as ritase");
+
+            $rawTransactions = $this->applyDashboardFilters($txQuery, 'Tanggal')
+                ->groupBy(DB::raw("TRIM(Kode)"))
+                ->get();
+
+            // 3. Mapping dan agregasi di level PHP runtime
+            $grouped = [];
+            $tonasePerKode = [];
+            $totalRitase = 0;
+
+            foreach ($rawTransactions as $tx) {
+                $kd = (string) $tx->kode;
+                $tonase = round(((float) $tx->total_netto) / 1000, 2);
+                $tonasePerKode[$kd] = $tonase;
+                $matName = $codeToMaterial[$kd] ?? null;
+
+                if ($matName !== null) {
+                    if (!isset($grouped[$matName])) {
+                        $grouped[$matName] = [
+                            'material' => $matName,
+                            'total'    => 0.0,
+                            'codes'    => [],
+                        ];
+                    }
+                    $grouped[$matName]['total'] += $tonase;
+                    if (!in_array($kd, $grouped[$matName]['codes'], true)) {
+                        $grouped[$matName]['codes'][] = $kd;
+                    }
+                    $totalRitase += (int) $tx->ritase;
+                }
+            }
+
+            // 4. Query target plan untuk material yang aktif
+            $activeMaterialNames = array_keys($grouped);
+            $planRows = [];
+            $totalTargetPlan = 0.0;
+
+            if (!empty($activeMaterialNames)) {
+                $planRows = DB::connection('mysql_cy')
+                    ->table('tblplanprodcoalin')
+                    ->where('type', 'Coal Getting')
+                    ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
+                    ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
+                    ->whereIn('material_desc', $activeMaterialNames)
+                    ->selectRaw('material_desc, ROUND(SUM(tonase), 2) as total_plan')
+                    ->groupBy('material_desc')
+                    ->pluck('total_plan', 'material_desc')
+                    ->toArray();
+
+                $totalTargetPlan = (float) array_sum($planRows);
+            }
+
+            // 5. Susun format baris data untuk Chart.js
+            $rows = [];
+            foreach ($grouped as $matName => $dataItem) {
+                sort($dataItem['codes']);
+                $arrFormatted = [];
+                foreach ($dataItem['codes'] as $kd) {
+                    $t = $tonasePerKode[$kd] ?? 0.0;
+                    $arrFormatted[] = $kd . '#' . $t;
+                }
+
+                $rows[] = (object) [
+                    'material'     => $matName,
+                    'total'        => round($dataItem['total'], 2),
+                    'plan'         => (float) ($planRows[$matName] ?? 0.0),
+                    'material_ids' => implode(', ', $arrFormatted),
+                ];
+            }
+
+            // Urutkan dari total tonase terbesar
+            usort($rows, fn($a, $b) => $b->total <=> $a->total);
+
+            $rowsCollection = collect($rows);
 
             return [
-                'rows'   => $rows,
-                'total'  => $rows->sum('total') ?? 0,
-                'ritase' => $ritase,
+                'rows'        => $rowsCollection,
+                'total'       => round($rowsCollection->sum('total'), 2),
+                'target_plan' => $totalTargetPlan,
+                'ritase'      => $totalRitase,
             ];
         });
     }
 
     public function getPlanData(): array
     {
-        $f = $this->getDashboardFilter();
-
-        $activeMaterials = CoalGetting::query()
-            ->leftJoin('tblcoalmaterial_dashboard as m', function($join) {
-                $join->on(DB::raw("FIND_IN_SET(TRIM(tblcoaltransaksimasuk.Kode), REPLACE(m.code, ' ', ''))"), '>', DB::raw('0'));
-            })
-            ->where('m.type', 'Coal Getting')
-            ->whereDate('tblcoaltransaksimasuk.Tanggal', '>=', $f['tanggal_awal'])
-            ->whereDate('tblcoaltransaksimasuk.Tanggal', '<=', $f['tanggal_akhir'])
-            ->where('tblcoaltransaksimasuk.Netto', '>', 0)
-            ->distinct()
-            ->pluck('m.material');
-
-        $target = (float) \App\Models\PlanCoalIn::query()
-            ->where('type', 'Coal Getting')
-            ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
-            ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
-            ->whereIn('material_desc', $activeMaterials)
-            ->sum('tonase');
-
-        return ['target' => $target];
+        return ['target' => (float) ($this->getActivityData()['target_plan'] ?? 0.0)];
     }
 }

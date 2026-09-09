@@ -6,9 +6,11 @@ use App\Filament\Widgets\Concerns\FiltersDashboardPeriod;
 use App\Models\HaulingKA;
 use Filament\Support\RawJs;
 use Filament\Widgets\ChartWidget;
+use Illuminate\Support\Facades\DB;
 
 class ActivityHaulingKA extends ChartWidget
 {
+    protected static bool $isLazy = true;
     use FiltersDashboardPeriod;
 
     protected static string $view = 'filament.widgets.activity-chart-widget';
@@ -232,61 +234,103 @@ class ActivityHaulingKA extends ChartWidget
     public function getActivityData(): array
     {
         return $this->rememberDashboardDataHourly('activity_hauling_ka', function () {
-            // ── Chart: group by Material_desc ────────────────────────────
-            $chart = $this->applyDashboardFilters(
-                HaulingKA::query()
-                    ->selectRaw(" 
-                        IFNULL(m.Material_desc, k.Kode)                                              AS Material_desc,
-                        ROUND(SUM(k.Netto) / 1000, 2)                                                AS total_tonase,
-                        COUNT(DISTINCT k.NoKA)                                                        AS total_ka,
-                        SUM(CASE WHEN k.NoCT IS NOT NULL AND k.NoCT <> '' THEN 1 ELSE 0 END)         AS total_ct
-                    ")
-                    ->from('tblkirimcytransaksikirim_ka as k')
-                    ->leftJoin('tblkirimcymaterial as m', 'k.Kode', '=', 'm.Material_id'),
-                'k.Tanggal',
-            )
-                ->groupBy('m.Material_desc', 'k.Kode')
-                ->orderByDesc('total_tonase')
-                ->get();
+            // 1. Ambil master material ke PHP memory
+            $matLookup = DB::connection('mysql_cy')
+                ->table('tblkirimcymaterial')
+                ->pluck('Material_desc', 'Material_id')
+                ->toArray();
 
-            // ── Summary: total per status + total KA ─────────────────────
-            $summary = $this->applyDashboardFilters(
-                HaulingKA::query()
-                    ->selectRaw(" 
-                        COUNT(DISTINCT k.NoKA)                                                        AS total_ka,
-                        ROUND(SUM(k.Netto) / 1000, 2)                                                AS total_tonase,
-                        SUM(CASE WHEN k.Status = 'Terkirim'     THEN 1 ELSE 0 END)                   AS total_ct,
-                        SUM(CASE WHEN k.Status = 'Buffer'       THEN 1 ELSE 0 END)                   AS total_ct_buffer,
-                        SUM(CASE WHEN k.Status = 'Return Cargo' THEN 1 ELSE 0 END)                   AS total_return_cargo
-                    ")
-                    ->from('tblkirimcytransaksikirim_ka as k'),
-                'k.Tanggal',
-            )->first();
+            // 2. Query tunggal ke tabel transaksi tanpa SQL JOIN (mengurangi 3x full table scan 217k baris menjadi 1x)
+            $kaQuery = DB::connection('mysql_cy')
+                ->table('tblkirimcytransaksikirim_ka')
+                ->selectRaw("Kode, Shift, Status, NoKA, NoCT, Netto");
 
-            // ── Loading rate: tonase per shift ───────────────────────────
-            $shiftRows = $this->applyDashboardFilters(
-                HaulingKA::query()
-                    ->selectRaw(" 
-                        k.Shift,
-                        ROUND(SUM(k.Netto) / 1000, 2)                                                AS tonase_per_shift
-                    ")
-                    ->from('tblkirimcytransaksikirim_ka as k'),
-                'k.Tanggal',
-            )
-                ->groupBy('k.Shift')
-                ->orderBy('k.Shift')
-                ->get();
+            $rawRows = $this->applyDashboardFilters($kaQuery, 'Tanggal')->get();
+
+            // 3. Agregasi metrik chart, summary, dan shift loading rate di level PHP runtime
+            $byMaterial = [];
+            $totalKAOverall = [];
+            $totalCTCount = 0;
+            $totalBuffer = 0;
+            $totalReturnCargo = 0;
+            $totalTonaseOverall = 0.0;
+            $shiftTotals = [];
+
+            foreach ($rawRows as $row) {
+                $kode = (string) $row->Kode;
+                $desc = $matLookup[$kode] ?? $kode;
+                $tonase = ((float) $row->Netto) / 1000;
+                $totalTonaseOverall += $tonase;
+
+                $noKA   = trim((string) ($row->NoKA ?? ''));
+                $noCT   = trim((string) ($row->NoCT ?? ''));
+                $status = (string) ($row->Status ?? '');
+                $shift  = (string) ($row->Shift ?? '');
+
+                if ($noKA !== '') {
+                    $totalKAOverall[$noKA] = true;
+                }
+
+                if ($status === 'Terkirim') {
+                    $totalCTCount++;
+                } elseif ($status === 'Buffer') {
+                    $totalBuffer++;
+                } elseif ($status === 'Return Cargo') {
+                    $totalReturnCargo++;
+                }
+
+                if ($shift !== '') {
+                    $shiftTotals[$shift] = ($shiftTotals[$shift] ?? 0.0) + $tonase;
+                }
+
+                if (!isset($byMaterial[$desc])) {
+                    $byMaterial[$desc] = [
+                        'Material_desc' => $desc,
+                        'tonase'        => 0.0,
+                        'ka_list'       => [],
+                        'ct_count'      => 0,
+                    ];
+                }
+                $byMaterial[$desc]['tonase'] += $tonase;
+                if ($noKA !== '') {
+                    $byMaterial[$desc]['ka_list'][$noKA] = true;
+                }
+                if ($noCT !== '') {
+                    $byMaterial[$desc]['ct_count']++;
+                }
+            }
+
+            $chartRows = [];
+            foreach ($byMaterial as $desc => $item) {
+                $chartRows[] = (object) [
+                    'Material_desc' => $desc,
+                    'total_tonase'  => round($item['tonase'], 2),
+                    'total_ka'      => count($item['ka_list']),
+                    'total_ct'      => $item['ct_count'],
+                ];
+            }
+            usort($chartRows, fn($a, $b) => $b->total_tonase <=> $a->total_tonase);
+            $chartCollection = collect($chartRows);
+
+            ksort($shiftTotals);
+            $shiftRows = [];
+            foreach ($shiftTotals as $s => $t) {
+                $shiftRows[] = (object) [
+                    'Shift'            => $s,
+                    'tonase_per_shift' => round($t, 2),
+                ];
+            }
 
             return [
-                'chart' => $chart,
-                'total' => $chart->sum('total_tonase') ?? 0,
+                'chart' => $chartCollection,
+                'total' => round($totalTonaseOverall, 2),
                 'stats' => [
-                    'total_tonase'       => $summary->total_tonase ?? 0,
-                    'total_ka'           => $summary->total_ka ?? 0,
-                    'total_ct'           => $summary->total_ct ?? 0,
-                    'total_ct_buffer'    => $summary->total_ct_buffer ?? 0,
-                    'total_return_cargo' => $summary->total_return_cargo ?? 0,
-                    'shift_rows'         => $shiftRows,
+                    'total_tonase'       => round($totalTonaseOverall, 2),
+                    'total_ka'           => count($totalKAOverall),
+                    'total_ct'           => $totalCTCount,
+                    'total_ct_buffer'    => $totalBuffer,
+                    'total_return_cargo' => $totalReturnCargo,
+                    'shift_rows'         => collect($shiftRows),
                 ],
             ];
         });

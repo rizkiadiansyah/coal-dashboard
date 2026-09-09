@@ -36,6 +36,7 @@ class Login extends BaseLogin
     {
         return TextInput::make('username')
             ->label('Username')
+            ->placeholder('Masukkan username Anda...')
             ->required()
             ->autocomplete()
             ->autofocus()
@@ -45,9 +46,11 @@ class Login extends BaseLogin
     protected function getPasswordFormComponent(): Component
     {
         return parent::getPasswordFormComponent()
+            ->placeholder('Masukkan password Anda...')
             ->extraInputAttributes(['tabindex' => '2']); 
     }
 
+    // Type-hint : ?LoginResponse tetap dipertahankan agar tidak FatalError
     public function authenticate(): ?LoginResponse
     {
         try {
@@ -87,7 +90,13 @@ class Login extends BaseLogin
 
         session()->regenerate();
 
-        return app(LoginResponse::class);
+        // Mengembalikan anonymous class LoginResponse dengan hard redirect (bukan SPA navigate)
+        return new class implements LoginResponse {
+            public function toResponse($request)
+            {
+                return redirect()->to(Filament::getUrl());
+            }
+        };
     }
 
     // 2. Mengubah data credential yang dikirim saat proses login ke Auth Guard

@@ -6,6 +6,7 @@ use App\Filament\Widgets\Concerns\FiltersDashboardPeriod; // Trait filter rentan
 use App\Models\PlanObRemoval;
 use Filament\Support\RawJs;
 use Filament\Widgets\ChartWidget;
+use Illuminate\Support\Facades\DB;
 
 class PlanObRemovalChart extends ChartWidget
 {
@@ -81,11 +82,11 @@ class PlanObRemovalChart extends ChartWidget
     public function getActivityData(): array
     {
         return $this->rememberDashboardDataHourly('plan_ob_removal_chart', function () {
-
             $virtualDateRaw = "STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d')";
             $f = $this->getDashboardFilter();
 
-            $rows = PlanObRemoval::query()
+            $rows = DB::connection('mysql_cy')
+                ->table('tblobremoval')
                 ->selectRaw("
                     material_desc,
                     ROUND(SUM(IFNULL(plan, 0)), 2) as total_plan,
@@ -105,8 +106,8 @@ class PlanObRemovalChart extends ChartWidget
 
             return [
                 'rows'        => $rows,
-                'total'       => $rows->sum('total_actual') ?? 0,
-                'target_plan' => $rows->sum('total_plan') ?? 0,
+                'total'       => (float) ($rows->sum('total_actual') ?? 0),
+                'target_plan' => (float) ($rows->sum('total_plan') ?? 0),
             ];
         });
     }

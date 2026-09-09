@@ -6,9 +6,11 @@ use App\Filament\Widgets\Concerns\FiltersDashboardPeriod;
 use App\Models\HaulingCY;
 use Filament\Support\RawJs;
 use Filament\Widgets\ChartWidget;
+use Illuminate\Support\Facades\DB;
 
 class ActivityHaulingCY extends ChartWidget
 {
+    protected static bool $isLazy = true;
     use FiltersDashboardPeriod;
 
     protected static string $view = 'filament.widgets.activity-chart-widget';
@@ -217,42 +219,74 @@ class ActivityHaulingCY extends ChartWidget
     public function getActivityData(): array
     {
         return $this->rememberDashboardDataHourly('activity_hauling_cy', function () {
-            // ── Chart rows: group by Material_desc ──────────────────────
-            $rows = $this->applyDashboardFilters(
-                HaulingCY::query()
-                    ->selectRaw(" 
-                        IFNULL(m.Material_desc, tblkirimcytransaksikirim.Kode) as Material_desc,
-                        ROUND(SUM(tblkirimcytransaksikirim.Netto) / 1000, 2) as total,
-                        GROUP_CONCAT(DISTINCT tblkirimcytransaksikirim.Kode ORDER BY tblkirimcytransaksikirim.Kode SEPARATOR ', ') as material_ids
-                    ")
-                    ->leftJoin('tblkirimcymaterial as m', 'tblkirimcytransaksikirim.Kode', '=', 'm.Material_id'),
-                'tblkirimcytransaksikirim.Tanggal',
-            )
-                ->groupBy('m.Material_desc')
-                ->orderByDesc('total')
+            // 1. Ambil master material ke PHP memory
+            $matLookup = DB::connection('mysql_cy')
+                ->table('tblkirimcymaterial')
+                ->pluck('Material_desc', 'Material_id')
+                ->toArray();
+
+            // 2. Query tunggal ke tabel transaksi tanpa SQL JOIN (mengurangi 4x full table scan 308k baris menjadi 1x)
+            $cyQuery = DB::connection('mysql_cy')
+                ->table('tblkirimcytransaksikirim')
+                ->selectRaw("Kode, Status, SUM(Netto) as total_netto, COUNT(*) as cnt");
+
+            $cyAgg = $this->applyDashboardFilters($cyQuery, 'Tanggal')
+                ->groupBy('Kode', 'Status')
                 ->get();
 
-            // ── Stats dari kolom Status di tabel transaksi ───────────────
-            $totalCT = $this->applyDashboardFilters(
-                HaulingCY::query(),
-                'tblkirimcytransaksikirim.Tanggal',
-            )->count();
+            // 3. Agregasi metrik status & grouping material di level PHP runtime
+            $byMaterial = [];
+            $totalCT = 0;
+            $totalBuffer = 0;
+            $totalReturnCargo = 0;
+            $totalTonase = 0.0;
 
-            $totalBuffer = $this->applyDashboardFilters(
-                HaulingCY::query()->where('Status', 'Buffer'),
-                'tblkirimcytransaksikirim.Tanggal',
-            )->count();
+            foreach ($cyAgg as $row) {
+                $cnt = (int) $row->cnt;
+                $totalCT += $cnt;
+                if ($row->Status === 'Buffer') {
+                    $totalBuffer += $cnt;
+                }
+                if ($row->Status === 'Return Cargo') {
+                    $totalReturnCargo += $cnt;
+                }
 
-            $totalReturnCargo = $this->applyDashboardFilters(
-                HaulingCY::query()->where('Status', 'Return Cargo'),
-                'tblkirimcytransaksikirim.Tanggal',
-            )->count();
+                $kode   = (string) $row->Kode;
+                $desc   = $matLookup[$kode] ?? $kode;
+                $tonase = round(((float) $row->total_netto) / 1000, 2);
+                $totalTonase += $tonase;
+
+                if (!isset($byMaterial[$desc])) {
+                    $byMaterial[$desc] = [
+                        'Material_desc' => $desc,
+                        'total'         => 0.0,
+                        'codes'         => [],
+                    ];
+                }
+                $byMaterial[$desc]['total'] += $tonase;
+                if (!in_array($kode, $byMaterial[$desc]['codes'], true)) {
+                    $byMaterial[$desc]['codes'][] = $kode;
+                }
+            }
+
+            $rows = [];
+            foreach ($byMaterial as $desc => $item) {
+                sort($item['codes']);
+                $rows[] = (object) [
+                    'Material_desc' => $desc,
+                    'total'         => round($item['total'], 2),
+                    'material_ids'  => implode(', ', $item['codes']),
+                ];
+            }
+
+            usort($rows, fn($a, $b) => $b->total <=> $a->total);
+            $rowsCollection = collect($rows);
 
             return [
-                'rows'  => $rows,
-                'total' => $rows->sum('total') ?? 0,
+                'rows'  => $rowsCollection,
+                'total' => round($totalTonase, 2),
                 'stats' => [
-                    'total_tonase'       => $rows->sum('total') ?? 0,
+                    'total_tonase'       => round($totalTonase, 2),
                     'total_ct'           => $totalCT,
                     'total_buffer'       => $totalBuffer,
                     'total_return_cargo' => $totalReturnCargo,

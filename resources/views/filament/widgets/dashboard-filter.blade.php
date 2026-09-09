@@ -64,7 +64,10 @@
             {{-- ── Info terakhir data masuk (real dari DB) ── --}}
             @php $update = $this->getLastDataUpdate(); @endphp
 
-            <div class="flex items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-700">
+            <div
+                wire:key="dashboard-data-update-{{ $dashboardRefreshKey }}"
+                class="flex items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-700"
+            >
 
                 {{-- Dot live --}}
                 <span class="relative flex h-2 w-2 flex-shrink-0">
@@ -76,7 +79,7 @@
 
                 @if($update)
                     <span class="text-xs text-gray-500 dark:text-gray-400">
-                        Data terakhir masuk:
+                        Data terakhir diperbarui:
                         <span class="font-semibold text-gray-800 dark:text-gray-100">
                             {{ $update['is_today'] ? $update['time'] . ' WIB' : $update['date'] . ' ' . $update['time'] . ' WIB' }}
                         </span>

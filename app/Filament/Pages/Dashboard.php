@@ -2,6 +2,8 @@
 
 namespace App\Filament\Pages;
 
+use Filament\Actions\Action;
+use Illuminate\Support\Facades\Cache;
 use App\Filament\Widgets\DashboardFilter;
 use App\Filament\Widgets\CoalMovementStats;
 use App\Filament\Widgets\CoalMovementMonthlyStats;
@@ -24,6 +26,54 @@ class Dashboard extends \Filament\Pages\Dashboard
     public static function canAccess(): bool
     {
         return true;
+    }
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            Action::make('refreshDashboard')
+                ->label('Refresh dashboard')
+                ->icon('heroicon-o-arrow-path')
+                ->iconButton()
+                ->tooltip('Refresh dashboard')
+                ->action(function (): void {
+                    $timezone = 'Asia/Jakarta';
+                    $now = now($timezone);
+                    $filter = session('dashboard_filter', [
+                        'tanggal_awal' => $now->toDateString(),
+                        'tanggal_akhir' => $now->toDateString(),
+                    ]);
+                    $period = ($filter['tanggal_awal'] ?? $now->toDateString()) . '_' .
+                        ($filter['tanggal_akhir'] ?? $now->toDateString());
+                    $hour = $now->format('YmdH');
+
+                    foreach ([
+                        'activity_coal_getting',
+                        'activity_coal_in_bmss_trading',
+                        'activity_coal_in_outsource',
+                        'activity_crushing',
+                        'activity_hauling_cy',
+                        'activity_hauling_ka',
+                        'activity_stockpile_wbs',
+                    ] as $widgetKey) {
+                        Cache::forget("widget_{$widgetKey}_{$period}_{$hour}");
+                        Cache::forget("widget_{$widgetKey}_{$period}_{$hour}:updated_at");
+                    }
+
+                    Cache::forget("widget_plan_ob_removal_chart_{$period}_{$hour}");
+                    Cache::forget("widget_plan_ob_removal_chart_{$period}_{$hour}:updated_at");
+                    Cache::forget("widget_coal_movement_stats_{$now->toDateString()}_{$hour}");
+                    Cache::forget("widget_coal_movement_stats_{$now->toDateString()}_{$hour}:updated_at");
+                    Cache::forget("widget_coal_movement_monthly_stats_{$now->format('Ym')}_{$hour}");
+                    Cache::forget("widget_coal_movement_monthly_stats_{$now->format('Ym')}_{$hour}:updated_at");
+                    // Simpan waktu refresh terbaru
+                    Cache::put('dashboard_last_refreshed_at', $now->toDateTimeString(), now()->addHours(24));
+                    session(['dashboard_last_refreshed_at' => $now->toDateTimeString()]);
+
+                    // Broadcast event ke seluruh widget dashboard
+                    $this->dispatch('filterUpdated');
+                }),
+        ];
     }
 
     public function getWidgets(): array

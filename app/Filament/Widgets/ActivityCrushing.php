@@ -6,9 +6,11 @@ use App\Filament\Widgets\Concerns\FiltersDashboardPeriod;
 use App\Models\CrusherActivity;
 use Filament\Support\RawJs;
 use Filament\Widgets\ChartWidget;
+use Illuminate\Support\Facades\DB;
 
 class ActivityCrushing extends ChartWidget
 {
+    protected static bool $isLazy = true;
     use FiltersDashboardPeriod;
 
     protected static string $view = 'filament.widgets.activity-chart-widget';
@@ -297,93 +299,121 @@ class ActivityCrushing extends ChartWidget
         return $this->getActivityData()['per_crusher'];
     }
 
-    private function getActivityData(): array
+    public function getActivityData(): array
     {
         return $this->rememberDashboardDataHourly('activity_crushing', function () {
-            $perCrusher  = [];
-            $totalTonase = 0;
-
-            foreach ($this->crusherList as $crusher) {
-                $baseQuery = fn() => $this->applyDashboardFilters(
-                    CrusherActivity::query()->where('tblcrusheractivity.Crusher', $crusher),
-                    'Tanggal',
-                    'tblcrusheractivity.Crusher',
-                );
-
-                $crushing = $baseQuery()
-                    ->where('tblcrusheractivity.Activity', 'Coal Crushing')
-                    ->selectRaw("
-                        SUM(CASE WHEN tblcrusheractivity.Alat_loading IN ('Direct Dumping', 'Direct Dumping(TP)') THEN Tonase ELSE 0 END) as total_direct,
-                        SUM(CASE WHEN tblcrusheractivity.Alat_loading NOT IN ('Direct Dumping', 'Direct Dumping(TP)') THEN Tonase ELSE 0 END) as total_truck,
-                        SUM(CASE WHEN tblcrusheractivity.Alat_loading IN ('Direct Dumping', 'Direct Dumping(TP)') THEN Qty_bucket ELSE 0 END) as ritase_direct,
-                        SUM(CASE WHEN tblcrusheractivity.Alat_loading NOT IN ('Direct Dumping', 'Direct Dumping(TP)') THEN Qty_bucket ELSE 0 END) as ritase_truck
-                    ")
-                    ->first();
-
-                $mDirect = $this->applyDashboardFilters(
-                    CrusherActivity::query()->where('tblcrusheractivity.Crusher', $crusher),
-                    'Tanggal'
-                )
-                    ->where('tblcrusheractivity.Activity', 'Coal Crushing')
-                    ->join('tblcrushermaterial as m', 'tblcrusheractivity.Kode_Material', '=', 'm.Material_id')
-                    ->whereIn('tblcrusheractivity.Alat_loading', ['Direct Dumping', 'Direct Dumping(TP)'])
-                    ->groupBy('m.Material_desc')
-                    ->selectRaw("m.Material_desc as name, ROUND(SUM(tblcrusheractivity.Tonase), 2) as total")
-                    ->having('total', '>', 0)
-                    ->get()
-                    ->toArray();
-
-                $mTruck = $this->applyDashboardFilters(
-                    CrusherActivity::query()->where('tblcrusheractivity.Crusher', $crusher),
-                    'Tanggal'
-                )
-                    ->where('tblcrusheractivity.Activity', 'Coal Crushing')
-                    ->join('tblcrushermaterial as m', 'tblcrusheractivity.Kode_Material', '=', 'm.Material_id')
-                    ->whereNotIn('tblcrusheractivity.Alat_loading', ['Direct Dumping', 'Direct Dumping(TP)'])
-                    ->groupBy('m.Material_desc')
-                    ->selectRaw("m.Material_desc as name, ROUND(SUM(tblcrusheractivity.Tonase), 2) as total")
-                    ->having('total', '>', 0)
-                    ->get()
-                    ->toArray();
-
-                $directDumping = (float) ($crushing->total_direct ?? 0);
-                $truckCount    = (float) ($crushing->total_truck ?? 0);
-                $ritaseDirect  = (int)   ($crushing->ritase_direct ?? 0);
-                $ritaseTruck   = (int)   ($crushing->ritase_truck ?? 0);
-
-                $perCrusher[$crusher] = [
-                    'direct_dumping'   => $directDumping,
-                    'truck_count'      => $truckCount,
-                    'ritase_direct'    => $ritaseDirect,
-                    'ritase_truck'     => $ritaseTruck,
-                    'materials_direct' => $mDirect,
-                    'materials_truck'  => $mTruck,
-                ];
-
-                $totalTonase += ($directDumping + $truckCount);
-            }
-
             $f = $this->getDashboardFilter();
 
-            $planPerCrusher = \App\Models\PlanCrushing::query()
+            // 1. Ambil master mapping material crusher ke PHP memory
+            $matLookup = DB::connection('mysql_cy')
+                ->table('tblcrushermaterial')
+                ->pluck('Material_desc', 'Material_id')
+                ->toArray();
+
+            // 2. Query tunggal untuk seluruh crusher tanpa loop & tanpa SQL JOIN
+            $baseQuery = DB::connection('mysql_cy')
+                ->table('tblcrusheractivity')
+                ->selectRaw("Crusher, Kode_Material, Alat_loading, SUM(Tonase) as total_tonase, SUM(Qty_bucket) as total_bucket")
+                ->whereIn('Crusher', $this->crusherList)
+                ->where('Activity', 'Coal Crushing');
+
+            $crushAgg = $this->applyDashboardFilters($baseQuery, 'Tanggal')
+                ->groupBy('Crusher', 'Kode_Material', 'Alat_loading')
+                ->get();
+
+            // 3. Agregasi data per crusher dan rincian material di level PHP runtime
+            $perCrusher = [];
+            $totalTonase = 0.0;
+            $activePairs = [];
+
+            foreach ($this->crusherList as $c) {
+                $perCrusher[$c] = [
+                    'direct_dumping'   => 0.0,
+                    'truck_count'      => 0.0,
+                    'ritase_direct'    => 0,
+                    'ritase_truck'     => 0,
+                    'materials_direct' => [],
+                    'materials_truck'  => [],
+                ];
+            }
+
+            $mDirectGroup = [];
+            $mTruckGroup  = [];
+
+            foreach ($crushAgg as $row) {
+                $c = (string) $row->Crusher;
+                if (!isset($perCrusher[$c])) {
+                    continue;
+                }
+
+                $tonase   = (float) $row->total_tonase;
+                $bucket   = (int) $row->total_bucket;
+                $isDirect = in_array($row->Alat_loading, ['Direct Dumping', 'Direct Dumping(TP)'], true);
+                $matName  = $matLookup[$row->Kode_Material] ?? (string) $row->Kode_Material;
+
+                if ($tonase > 0) {
+                    $activePairs[$c . '|' . $matName] = true;
+                }
+
+                if ($isDirect) {
+                    $perCrusher[$c]['direct_dumping'] += $tonase;
+                    $perCrusher[$c]['ritase_direct'] += $bucket;
+                    $mDirectGroup[$c][$matName] = ($mDirectGroup[$c][$matName] ?? 0.0) + $tonase;
+                } else {
+                    $perCrusher[$c]['truck_count'] += $tonase;
+                    $perCrusher[$c]['ritase_truck'] += $bucket;
+                    $mTruckGroup[$c][$matName] = ($mTruckGroup[$c][$matName] ?? 0.0) + $tonase;
+                }
+
+                $totalTonase += $tonase;
+            }
+
+            foreach ($this->crusherList as $c) {
+                if (!empty($mDirectGroup[$c])) {
+                    foreach ($mDirectGroup[$c] as $mName => $mTot) {
+                        if ($mTot > 0) {
+                            $perCrusher[$c]['materials_direct'][] = [
+                                'name'  => $mName,
+                                'total' => round($mTot, 2),
+                            ];
+                        }
+                    }
+                }
+                if (!empty($mTruckGroup[$c])) {
+                    foreach ($mTruckGroup[$c] as $mName => $mTot) {
+                        if ($mTot > 0) {
+                            $perCrusher[$c]['materials_truck'][] = [
+                                'name'  => $mName,
+                                'total' => round($mTot, 2),
+                            ];
+                        }
+                    }
+                }
+            }
+
+            // 4. Query plan dan cocokkan dengan pasangan aktif di PHP (menghilangkan correlated whereExists subquery)
+            $planRows = DB::connection('mysql_cy')
+                ->table('tblplanprodcrush')
+                ->whereIn('equipment', $this->crusherList)
                 ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') >= ?", [$f['tanggal_awal']])
                 ->whereRaw("STR_TO_DATE(CONCAT(tahun, '-', bulan, '-', hari_ke), '%Y-%m-%d') <= ?", [$f['tanggal_akhir']])
-                ->whereIn('equipment', $this->crusherList)
-                ->whereExists(function ($sub) {
-                    $sub->select(\Illuminate\Support\Facades\DB::raw(1))
-                        ->from('tblcrusheractivity as t')
-                        ->join('tblcrushermaterial as m', 't.Kode_Material', '=', 'm.Material_id')
-                        ->whereColumn('t.Crusher', 'tblplanprodcrush.equipment')
-                        ->whereColumn('m.Material_desc', 'tblplanprodcrush.material_desc')
-                        ->where('t.Tonase', '>', 0);
-                })
-                ->selectRaw('equipment, ROUND(SUM(tonase), 2) as total_plan')
-                ->groupBy('equipment')
-                ->pluck('total_plan', 'equipment');
+                ->get();
+
+            $planPerCrusher = [];
+            foreach ($planRows as $p) {
+                $pairKey = $p->equipment . '|' . $p->material_desc;
+                if (isset($activePairs[$pairKey])) {
+                    $planPerCrusher[$p->equipment] = ($planPerCrusher[$p->equipment] ?? 0.0) + (float) $p->tonase;
+                }
+            }
+
+            foreach ($this->crusherList as $c) {
+                $planPerCrusher[$c] = round($planPerCrusher[$c] ?? 0.0, 2);
+            }
 
             return [
                 'per_crusher'      => $perCrusher,
-                'total_tonase'     => $totalTonase,
+                'total_tonase'     => round($totalTonase, 2),
                 'plan_per_crusher' => $planPerCrusher,
             ];
         });
